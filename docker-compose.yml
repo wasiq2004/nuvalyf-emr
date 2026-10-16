@@ -24,9 +24,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-medflow}
-    # Only reachable from this machine. Remove the mapping entirely in production.
-    ports:
-      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    # No host port: only the other services reach it. For local access, see
+    # docker-compose.override.yml.
     volumes:
       - medflow_data:/var/lib/postgresql/data
     healthcheck:
@@ -62,8 +61,12 @@ services:
       context: .
       target: runner
     restart: unless-stopped
-    ports:
-      - "${WEB_PORT:-3000}:3000"
+    # Reached through the platform's reverse proxy (Dokploy/Traefik, Caddy,
+    # nginx) on the Docker network, so no host port is published: the host's
+    # 3000 is often taken (Dokploy's own dashboard uses it). Locally,
+    # docker-compose.override.yml publishes it.
+    expose:
+      - "3000"
     environment:
       DATABASE_URL: *app-url
       PLATFORM_DATABASE_URL: *platform-url

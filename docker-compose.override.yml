@@ -1,0 +1,11 @@
+# Local use only. `docker compose up` loads this file automatically and
+# publishes the app and database on this machine. Deployments that name the
+# compose file explicitly (Dokploy: `-f docker-compose.yml`) skip it and
+# reach the app through their reverse proxy instead.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+  web:
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"

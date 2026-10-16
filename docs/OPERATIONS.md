@@ -37,7 +37,7 @@ docker compose ps            # setup: exited (0); db, web, worker: running
 curl -s localhost:3000/api/health
 ```
 
-Bind the app to localhost and let the proxy publish it. A minimal Caddy config:
+`docker-compose.yml` publishes no host ports. On a plain server, `docker compose up` also loads `docker-compose.override.yml`, which publishes the app on `127.0.0.1:3000` (and the database on `127.0.0.1:${DB_PORT}`) for a reverse proxy on the same host. A minimal Caddy config:
 
 ```
 clinic.example.com {
@@ -45,7 +45,16 @@ clinic.example.com {
 }
 ```
 
-Set `WEB_PORT` if 3000 is taken. Keep the database port mapping on `127.0.0.1` (the default), or remove it entirely.
+Set `WEB_PORT` if 3000 is taken.
+
+### Deploying with Dokploy
+
+1. Create a **Compose** service from the repository, with compose path `./docker-compose.yml`. Dokploy passes that file explicitly, so the local override (and its host ports) is not used. Port 3000 on the server belongs to Dokploy's own dashboard.
+2. Under **Environment**, set the variables from the table above, with `AUTH_URL=https://<your-domain>` and `TRUST_PROXY_HOPS=1` (Traefik).
+3. Under **Domains**, add your domain for service **web**, container port **3000**, with HTTPS on. Dokploy's Traefik routes to the container over its network.
+4. Deploy. `setup` should exit with code 0, then `web` and `worker` start. Check `https://<your-domain>/api/health`.
+
+Backups: run `scripts/ops/backup.sh` with `COMPOSE_PROJECT_NAME` set to the project name Dokploy shows (for example `nuvalyf-nuvalyf-9mq1ma`), or use Dokploy's scheduled commands.
 
 ### Upgrading
 
