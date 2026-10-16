@@ -1,0 +1,1 @@
+ALTER TABLE "app"."clinic_settings" DROP COLUMN "doctors_can_admit_emergency";

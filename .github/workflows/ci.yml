@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_OWNER_URL: postgres://postgres:postgres@localhost:5432/medflow
+      DATABASE_URL: postgres://medflow_app:ci-app@localhost:5432/medflow
+      PLATFORM_DATABASE_URL: postgres://medflow_platform:ci-platform@localhost:5432/medflow
+      PROVISIONER_DATABASE_URL: postgres://medflow_provisioner:ci-provisioner@localhost:5432/medflow
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:integration
+      - name: Migrations are in sync with the schema
+        run: |
+          npx drizzle-kit generate --name ci-check
+          git diff --exit-code -- db/migrations || (echo "Schema changed without a migration. Run npm run db:generate." && exit 1)
+      - run: npm run build
+        env:
+          AUTH_SECRET: ci-build-only-secret
+          PLATFORM_AUTH_SECRET: ci-build-only-platform-secret
+      - run: npm audit --omit=dev --audit-level=high
+
+  # Every role's flow in a real browser against a production build.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: verify
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_OWNER_URL: postgres://postgres:postgres@localhost:5432/medflow
+      DATABASE_URL: postgres://medflow_app:ci-app@localhost:5432/medflow
+      PLATFORM_DATABASE_URL: postgres://medflow_platform:ci-platform@localhost:5432/medflow
+      PROVISIONER_DATABASE_URL: postgres://medflow_provisioner:ci-provisioner@localhost:5432/medflow
+      AUTH_SECRET: ci-e2e-clinic-secret-not-for-production
+      PLATFORM_AUTH_SECRET: ci-e2e-platform-secret-not-for-production
+      AUTH_URL: http://localhost:3000
+      PLATFORM_ADMIN_EMAIL: admin@ci.test
+      PLATFORM_ADMIN_PASSWORD: ci-e2e-admin-password
+      DATA_ENCRYPTION_KEY: Y2ktZTJlLWVuY3J5cHRpb24ta2V5LTMyLWJ5dGVzISE=
+      WHATSAPP_DRIVER: log
+      E2E_BASE_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:create-platform-admin
+      - run: npm run build
+      - name: Start the server
+        run: |
+          npm start -- -p 3000 > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/api/health && exit 0; sleep 2; done
+          cat server.log; exit 1
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: |
+            test-results/
+            server.log
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target runner -t medflow-web .
+      - run: docker build --target tools -t medflow-tools .
+      - run: docker build --target worker -t medflow-worker .

@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.next
+node_modules
+coverage
+npm-debug.log
+*.md
+.env
+.env*.local
+.env.example
+docker-compose.yml
+Dockerfile
+legacy
+tests
+docs

@@ -1,0 +1,105 @@
+name: medflow-emr
+
+# Configuration comes from a .env file next to this one - copy .env.example.
+
+x-owner-url: &owner-url postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
+x-app-url: &app-url postgres://medflow_app:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
+x-platform-url: &platform-url postgres://medflow_platform:${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
+x-provisioner-url: &provisioner-url postgres://medflow_provisioner:${PROVISIONER_DB_PASSWORD:?Set PROVISIONER_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
+
+# Container logs rotate at 20 MB x 10 files per service (~200 MB cap). Ship
+# them elsewhere for longer retention; see docs/OPERATIONS.md.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "10"
+
+services:
+  db:
+    logging: *logging
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-medflow}
+    # Only reachable from this machine. Remove the mapping entirely in production.
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - medflow_data:/var/lib/postgresql/data
+    healthcheck:
+      # Checks the server, not POSTGRES_DB: setup creates that database if it is missing.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Runs once per `docker compose up`: creates the runtime DB roles, applies
+  # migrations + security policies, and creates the first Super Admin.
+  # Never deletes data.
+  setup:
+    logging: *logging
+    build:
+      context: .
+      target: tools
+    restart: "no"
+    environment:
+      DATABASE_OWNER_URL: *owner-url
+      DATABASE_URL: *app-url
+      PLATFORM_DATABASE_URL: *platform-url
+      PROVISIONER_DATABASE_URL: *provisioner-url
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    logging: *logging
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: *app-url
+      PLATFORM_DATABASE_URL: *platform-url
+      # Remove this line to switch off clinic onboarding and admin rescue.
+      PROVISIONER_DATABASE_URL: *provisioner-url
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env (openssl rand -base64 32)}
+      PLATFORM_AUTH_SECRET: ${PLATFORM_AUTH_SECRET:?Set PLATFORM_AUTH_SECRET in .env (openssl rand -base64 32)}
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      AUTH_TRUST_HOST: "true"
+      # Reverse proxies in front of the app (see docs/OPERATIONS.md).
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+      WHATSAPP_DRIVER: ${WHATSAPP_DRIVER:-cloud}
+      DEFAULT_COUNTRY_CODE: ${DEFAULT_COUNTRY_CODE:-91}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  # Appointment reminders and WhatsApp broadcasts. Safe to scale: only one
+  # replica works at a time (advisory lock).
+  worker:
+    logging: *logging
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: *app-url
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+      WHATSAPP_DRIVER: ${WHATSAPP_DRIVER:-cloud}
+      DEFAULT_COUNTRY_CODE: ${DEFAULT_COUNTRY_CODE:-91}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+volumes:
+  # Not "postgres_data": that name belongs to the v1 stack, which used the same
+  # project name. v2 keeps its data apart and never writes to the v1 volume.
+  medflow_data:
