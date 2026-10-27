@@ -47,7 +47,18 @@ export async function searchDrugs(tx: Tx, query: string, limit = 15): Promise<Dr
       defaultInstructions: drugs.defaultInstructions,
     })
     .from(drugs)
-    .where(and(eq(drugs.isActive, true), or(ilike(drugs.name, `%${term}%`), ilike(drugs.genericName, `%${term}%`))))
+    .where(
+      and(
+        eq(drugs.isActive, true),
+        // Consumables and instruments are stocked and sold, never prescribed.
+        eq(drugs.itemType, "medicine"),
+        or(
+          ilike(drugs.name, `%${term}%`),
+          ilike(drugs.genericName, `%${term}%`),
+          sql`exists (select 1 from app.drug_aliases a where a.drug_id = ${drugs.id} and a.alias ilike ${`%${term}%`})`,
+        ),
+      ),
+    )
     .orderBy(sql`case when ${drugs.name} ilike ${`${term}%`} then 0 else 1 end`, asc(drugs.name))
     .limit(limit);
 }
@@ -96,6 +107,7 @@ export async function warningsFor(tx: Tx, encounterId: string, drugId: string): 
   const [drug] = await tx.select().from(drugs).where(eq(drugs.id, drugId)).limit(1);
   if (!drug) throw new AppError("Medicine not found.");
   if (!drug.isActive) throw new AppError("This medicine has been deactivated in the clinic's list.");
+  if (drug.itemType !== "medicine") throw new AppError(`${drug.name} is not a medicine and cannot be prescribed.`);
 
   const draft = await getDraftPrescription(tx, encounterId);
   const items = draft?.items ?? [];

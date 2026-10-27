@@ -450,7 +450,7 @@ CREATE TRIGGER stock_batches_guard BEFORE INSERT OR UPDATE OR DELETE ON app.stoc
 DO $$
 DECLARE tbl text;
 BEGIN
-  FOREACH tbl IN ARRAY ARRAY['stock_movements', 'pharmacy_sales', 'pharmacy_sale_items'] LOOP
+  FOREACH tbl IN ARRAY ARRAY['stock_movements', 'pharmacy_sales', 'pharmacy_sale_items', 'purchase_bills', 'purchase_bill_items'] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON app.%I', tbl || '_append_only', tbl);
     EXECUTE format(
       'CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION sys.reject_change()',

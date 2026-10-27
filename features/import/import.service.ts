@@ -4,7 +4,7 @@ import "server-only";
 // transaction - or nothing. A stated age is stored with the import date so it
 // ages correctly. Likely duplicates of existing patients are errors: the same
 // "search before create" rule as the front desk.
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
 import { importJobs } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
@@ -78,5 +78,5 @@ export async function recordRejected(tx: Tx, clinicId: string, fileName: string,
 }
 
 export function listImportJobs(tx: Tx) {
-  return tx.select().from(importJobs).orderBy(desc(importJobs.createdAt)).limit(20);
+  return tx.select().from(importJobs).where(eq(importJobs.kind, "patients")).orderBy(desc(importJobs.createdAt)).limit(20);
 }

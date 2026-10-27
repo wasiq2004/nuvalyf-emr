@@ -1,10 +1,13 @@
 import Link from "next/link";
-import { Boxes } from "lucide-react";
+import { Boxes, FileUp } from "lucide-react";
+import { ButtonLink } from "@/components/app/buttons";
+import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
+import { packWord } from "@/features/pharmacy/selling-rules";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
 import { TabNav } from "@/components/app/tabs";
-import { requireClinic } from "@/lib/auth/clinic-session";
+import { can, requireClinic } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { formatDate } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
@@ -54,7 +57,14 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
       <PageHeader
         icon={Boxes}
         title="Stock"
-        description="On hand per medicine, from the movement ledger. Open a medicine to add stock, write off expired or damaged units, or set its reorder level."
+        description="On hand per item, from the movement ledger. Open an item to add stock, write off expired or damaged units, or set its reorder level."
+        actions={
+          can(ctx, "medicine:manage") ? (
+            <ButtonLink href="/pharmacy/stock/import" variant="secondary">
+              <FileUp className="h-4 w-4" /> Import items &amp; stock
+            </ButtonLink>
+          ) : undefined
+        }
       />
       <TabNav
         label="Stock filter"
@@ -74,20 +84,35 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
           columns={[
             {
               key: "name",
-              header: "Medicine",
+              header: "Item",
               cell: (r) => (
                 <Link href={`/pharmacy/stock/${r.drugId}`} className="group block">
-                  <p className="font-medium text-zinc-900 group-hover:underline dark:text-zinc-100">{r.name}</p>
-                  <p className="text-xs text-zinc-500">
-                    {r.genericName} · {r.form}
+                  <p className="flex flex-wrap items-center gap-2 font-medium text-zinc-900 group-hover:underline dark:text-zinc-100">
+                    {r.name} <ItemTypeBadge type={r.itemType} />
                   </p>
+                  <p className="text-xs text-zinc-500">{r.itemType === "medicine" ? `${r.genericName} · ${r.form}` : (r.manufacturer ?? "—")}</p>
                 </Link>
               ),
             },
             { key: "onHand", header: "On hand", align: "right", cell: (r) => <span className="font-semibold tabular-nums">{r.onHand}</span> },
             { key: "reorder", header: "Reorder at", align: "right", hideOnMobile: true, cell: (r) => r.reorderLevel || "—" },
             { key: "expiry", header: "Next expiry", hideOnMobile: true, cell: (r) => (r.nearestExpiry ? formatDate(r.nearestExpiry, "UTC") : "—") },
-            { key: "price", header: "Price", align: "right", hideOnMobile: true, cell: (r) => (r.price ? formatMoney(r.price, data.currency) : "—") },
+            {
+              key: "price",
+              header: "Price",
+              align: "right",
+              hideOnMobile: true,
+              cell: (r) => (
+                <span className="tabular-nums">
+                  {r.price ? formatMoney(r.price, data.currency) : "—"}
+                  {r.packSize > 1 && r.packPrice && (
+                    <span className="block text-xs text-zinc-500">
+                      {formatMoney(r.packPrice, data.currency)} / {packWord(r.form)}
+                    </span>
+                  )}
+                </span>
+              ),
+            },
             {
               key: "flags",
               header: "",

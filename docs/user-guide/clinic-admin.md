@@ -12,7 +12,7 @@ Work through these in order when your clinic is new:
 2. **Services:** what you charge for (consultation, follow-up, dressing, ...).
 3. **Staff:** create an account for everyone. Doctors need their registration number before they can sign.
 4. **Schedules:** each doctor's weekly hours and the services they offer.
-5. **Medicines & catalogues:** review the starter medicine list; add your own medicines and lab tests.
+5. **Medicines & catalogues:** review the starter medicine list; add your own medicines, consumables, instruments and lab tests. If the pharmacy is moving from other software, the pharmacist can import the item list and opening stock (see the [Pharmacist guide](pharmacist.md#importing-items-and-opening-stock)).
 6. **Messaging** (if your plan includes WhatsApp): connect your WhatsApp Business number.
 7. **Import patients** if you are moving from another system.
 
@@ -63,7 +63,7 @@ Each tab holds one list your clinic controls:
 
 | Tab | What it is |
 | --- | --- |
-| Medicines | What doctors can prescribe and the pharmacy sells. Includes default dose, frequency and duration |
+| Medicines & supplies | Everything the clinic stocks, with a **Price per unit** (sold loose) and an optional **Price per pack** (a whole strip, usually its MRP; empty means units × unit price). **Medicines** can be prescribed and carry default dose, frequency and duration; **consumables** (needles, gauze) and **instruments** are only stocked and sold. Each item can have **Other names**: other brands or suppliers' spellings, so bills and searches find it |
 | Interactions | Pairs of medicines that warn the doctor, with a severity |
 | Allergy classes | Groups such as penicillins, so an allergy warns on every medicine in the class |
 | Prescribing presets | Quick-pick dose and frequency combinations |

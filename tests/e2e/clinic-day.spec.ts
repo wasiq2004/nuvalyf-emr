@@ -292,12 +292,12 @@ test("Lab technician enters the result; it waits on the doctor's screen until re
 test("Clinic Admin edits the medicine list, and reads consultations without writing them", async () => {
   const page = adminPage;
   await page.goto("/settings/catalog");
-  await page.getByRole("button", { name: "Add medicine" }).click();
+  await page.getByRole("button", { name: "Add item" }).click();
   await page.getByLabel("Name (as prescribed)").fill(`Zinc ${suffix}`);
   await page.getByLabel(/^Generic name/).fill("Zinc sulphate");
-  await page.getByLabel("Strength").fill("20 mg");
+  await page.getByLabel("Strength / size").fill("20 mg");
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(page.getByText("Medicine added")).toBeVisible();
+  await expect(page.getByText("Item added")).toBeVisible();
   await expect(page.getByText(`Zinc ${suffix}`)).toBeVisible();
 
   await page.goto(encounterUrl);
@@ -319,7 +319,8 @@ test("Receptionist bills the finished visit; a double-click records one payment"
   await page.getByLabel("Reference").fill(`UPI-${suffix}`);
   await page.getByRole("button", { name: "Record payment" }).dblclick();
   await expect(page.getByText("Payment recorded").first()).toBeVisible();
-  await expect(page.getByText("Paid", { exact: true })).toBeVisible();
+  // The status badge (the totals list also has a "Paid" row).
+  await expect(page.locator("span").filter({ hasText: /^Paid$/ })).toBeVisible();
 
   const payments = page.locator("section", { has: page.getByRole("heading", { name: "Payments" }) }).locator("li");
   await expect(payments).toHaveCount(1);
@@ -339,7 +340,7 @@ test("Pharmacist stocks the shelf, fills the prescription once, and sells over t
   await page.locator("tr", { hasText: "Paracetamol 650" }).first().locator("button").first().click();
   await page.getByLabel("Price per unit").fill("2.50");
   await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Medicine updated")).toBeVisible();
+  await expect(page.getByText("Item updated")).toBeVisible();
 
   // Opening stock.
   const expiry = new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10);
@@ -377,6 +378,109 @@ test("Pharmacist stocks the shelf, fills the prescription once, and sells over t
 
   await page.goto("/pharmacy/stock");
   await expect(page.locator("tr", { hasText: "Paracetamol 650" }).first()).toContainText("89");
+});
+
+test("Pharmacist types in supplier bills: a new consumable, another supplier's spelling remembered, opening stock imported", async () => {
+  const page = pharmPage;
+  const asha = `Asha Distributors ${suffix}`;
+  const bharat = `Bharat Surgicals ${suffix}`;
+  const needle = `Clinic needle ${suffix}`;
+  const respelt = `Needle clinic ${suffix}`;
+
+  await page.goto("/pharmacy/purchases");
+  for (const name of [asha, bharat]) {
+    await page.getByRole("button", { name: "Add supplier" }).click();
+    await page.getByLabel("Name").fill(name);
+    await page.getByRole("button", { name: "Add supplier" }).last().click();
+    await expect(page.getByText(name)).toBeVisible();
+  }
+
+  // Bill 1: a needle the clinic has never stocked, added from the bill itself.
+  await page.getByRole("link", { name: "Enter a supplier bill" }).click();
+  await page.getByLabel("Supplier").selectOption({ label: asha });
+  await page.getByLabel("Bill number").fill(`A-${suffix}`);
+  await page.getByLabel("Item, line 1").fill(needle);
+  await page.getByRole("button", { name: `Add “${needle}” as a new item` }).click();
+  const dialog = page.getByRole("dialog", { name: "Add a new item" });
+  await dialog.getByLabel("Type").selectOption("consumable");
+  await dialog.getByLabel("Units per pack").fill("100");
+  await dialog.getByRole("button", { name: "Add item" }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByLabel("Batch, line 1").fill("ND1");
+  await page.getByLabel("Expiry, line 1").fill("12/30");
+  await page.getByLabel("Quantity, line 1").fill("2");
+  await expect(page.getByLabel("Units per pack, line 1")).toHaveValue("100");
+  await page.getByLabel("Rate, line 1").fill("120");
+  await page.getByLabel("GST, line 1").selectOption("18");
+
+  // Line 2: an existing medicine, in strips of 15, priced from its MRP.
+  await page.getByRole("button", { name: "Add line" }).click();
+  await page.getByLabel("Item, line 2").fill("Paracetamol 650");
+  await page.getByRole("option", { name: /^Paracetamol 650/ }).click();
+  await page.getByLabel("Batch, line 2").fill("PB1");
+  await page.getByLabel("Expiry, line 2").fill("06/29");
+  await page.getByLabel("Quantity, line 2").fill("5");
+  await page.getByLabel("Units per pack, line 2").fill("15");
+  await page.getByLabel("Rate, line 2").fill("30");
+  await page.getByLabel("MRP, line 2").fill("45");
+  // 2 x 120 + 18% GST, and 5 x 30 + 12% GST.
+  await expect(page.getByText("₹451.20", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Save bill & add to stock" }).dblclick();
+  await page.waitForURL(/\/pharmacy\/purchases\/bills\/[0-9a-f-]+$/);
+  await expect(page.getByText("2 lines · 275 units added to stock")).toBeVisible();
+
+  // Bill 2: another supplier writes the same needle differently; it is found and the spelling remembered.
+  await page.goto("/pharmacy/purchases/bills/new");
+  await page.getByLabel("Supplier").selectOption({ label: bharat });
+  await page.getByLabel("Bill number").fill(`B-${suffix}`);
+  await page.getByLabel("Item, line 1").fill(respelt);
+  await page.getByRole("option", { name: new RegExp(`^${needle}`) }).click();
+  await expect(page.getByLabel(`Remember “${respelt}” as another name for ${needle}`)).toBeChecked();
+  await page.getByLabel("Batch, line 1").fill("ND2");
+  await page.getByLabel("Expiry, line 1").fill("12/31");
+  await page.getByLabel("Quantity, line 1").fill("1");
+  await page.getByLabel("Rate, line 1").fill("118");
+  await page.getByRole("button", { name: "Save bill & add to stock" }).click();
+  await expect(page.getByText(`Remembered: ${respelt} → ${needle}`)).toBeVisible();
+  await page.waitForURL(/\/pharmacy\/purchases\/bills\/[0-9a-f-]+$/);
+  await expect(page.getByText(`On the bill: “${respelt}”`)).toBeVisible();
+
+  // Next time that spelling is matched by name.
+  await page.goto("/pharmacy/purchases/bills/new");
+  await page.getByLabel("Item, line 1").fill(respelt);
+  await expect(page.getByRole("option", { name: new RegExp(`Known as “${respelt}”`) })).toBeVisible();
+
+  await page.goto("/pharmacy/stock");
+  const row = page.locator("tr", { hasText: needle });
+  await expect(row).toContainText("Consumable");
+  await expect(row).toContainText("300");
+
+  // Opening stock from the old software's export: checked first, then all in.
+  await page.getByRole("link", { name: "Import items & stock" }).click();
+  await page.getByLabel("CSV file").setInputFiles({
+    name: "opening.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(`name,type,batch_no,expiry_date,quantity\nCotton roll ${suffix},consumable,CR1,12/2030,40\n${respelt},,ND3,12/2031,25\n`),
+  });
+  await page.getByRole("button", { name: "Check file" }).click();
+  await expect(page.getByText("All 2 rows are valid: 1 new item, 1 already in your list")).toBeVisible();
+  await page.getByRole("button", { name: "Import 2 rows" }).click();
+  await expect(page.getByText("Imported: 1 new items, 2 batches, 65 units")).toBeVisible();
+  await page.goto("/pharmacy/stock");
+  await expect(page.locator("tr", { hasText: `Cotton roll ${suffix}` })).toContainText("40");
+  await expect(page.locator("tr", { hasText: needle })).toContainText("325");
+
+  // Sold by the strip, at the strip's MRP from the bill (₹45 for 15), or loose.
+  await page.goto("/pharmacy/sale");
+  await page.getByRole("searchbox", { name: "Search stock" }).fill("Paracetamol 650");
+  await page.getByRole("button", { name: /Paracetamol 650/ }).click();
+  await page.getByLabel("Sell Paracetamol 650 as").selectOption("pack");
+  await page.getByLabel("Quantity of Paracetamol 650").fill("1");
+  await expect(page.getByText("₹45.00 per strip · 15 tablets")).toBeVisible();
+  await page.getByRole("button", { name: "Complete sale" }).click();
+  await page.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
+  await expect(page.getByRole("heading", { name: "₹45.00" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "1 strip (15 tablets)" })).toBeVisible();
 });
 
 test("Auditor sees who opened a record, and cannot reach any patient screen", async () => {

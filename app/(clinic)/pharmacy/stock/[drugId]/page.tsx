@@ -10,6 +10,8 @@ import { withClinic } from "@/lib/db";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { todayInTimeZone } from "@/lib/time";
 import { getDrugStock } from "@/features/pharmacy/stock.service";
+import { aliasesFor } from "@/features/catalog/items.service";
+import { ITEM_TYPE_LABELS, isItemType } from "@/features/catalog/item-rules";
 import { EXPIRY_WARNING_DAYS, expiresWithin, isExpired } from "@/features/pharmacy/stock-rules";
 import { AdjustBatchDialog, ReceiveStockDialog, ReorderLevelForm } from "./StockForms";
 
@@ -31,9 +33,16 @@ export default async function DrugStockPage({ params }: { params: Promise<{ drug
   const { drugId } = await params;
   if (!z.uuid().safeParse(drugId).success) notFound();
   const today = todayInTimeZone(ctx.timezone);
-  const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, (tx) => getDrugStock(tx, drugId));
+  const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => {
+    const stock = await getDrugStock(tx, drugId);
+    return stock ? { ...stock, aliases: (await aliasesFor(tx, [drugId])).get(drugId) ?? [] } : null;
+  });
   if (!data) notFound();
-  const { drug, batches, movements } = data;
+  const { drug, batches, movements, aliases } = data;
+  const kind = isItemType(drug.itemType) && drug.itemType !== "medicine" ? ITEM_TYPE_LABELS[drug.itemType] : null;
+  const describe = [kind, kind ? null : drug.genericName, kind ? null : drug.form, drug.strength, drug.manufacturer, drug.packSize > 1 ? `${drug.packSize} per pack` : null]
+    .filter(Boolean)
+    .join(" · ");
   const onHand = batches.reduce((n, b) => n + b.quantity, 0);
   const usable = batches.filter((b) => b.quantity > 0 && !isExpired(b.expiryDate, today)).reduce((n, b) => n + b.quantity, 0);
 
@@ -45,7 +54,7 @@ export default async function DrugStockPage({ params }: { params: Promise<{ drug
       <PageHeader
         icon={Boxes}
         title={drug.name}
-        description={`${drug.genericName} · ${drug.form}${drug.strength ? ` · ${drug.strength}` : ""}`}
+        description={aliases.length ? `${describe}. Also known as ${aliases.map((a) => a.alias).join(", ")}.` : describe}
         actions={<ReceiveStockDialog drugId={drug.id} drugName={drug.name} />}
       />
 

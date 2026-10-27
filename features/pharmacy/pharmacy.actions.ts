@@ -9,6 +9,13 @@ import { closePrescription, sell, sellableStock } from "./sales.service";
 import { adjustStock, receiveStock, setReorderLevel } from "./stock.service";
 import { answerQuery, raiseQuery } from "./queries.service";
 import { cancelOrder, createOrder, decideOrder, receiveOrder, removeOrderItem, saveSupplier, setOrderItem, submitOrder } from "./purchasing.service";
+import { enterBill } from "./bills.service";
+import { SOLD_AS } from "./selling-rules";
+import { GST_RATES, MAX_BILL_LINES } from "./purchase-rules";
+import { MAX_IMPORT_BYTES } from "@/features/import/import-rules";
+import { checkStockImport, recordRejectedStockImport, runStockImport, type StockImportReport } from "./stock-import.service";
+import { searchItems } from "@/features/catalog/items.service";
+import { checkbox } from "@/lib/validation";
 
 const idempotencyKey = z.string().trim().min(16, "Reload the page and try again.").max(64);
 const quantity = (label = "Quantity") => z.coerce.number({ message: `${label} must be a number` }).int("Whole units only").min(1, `${label} must be at least 1`).max(100000);
@@ -19,7 +26,7 @@ const batchField = z.string({ message: "Batch is required" }).trim().min(1, "Bat
 // Selling and dispensing
 // ---------------------------------------------------------------------------
 
-const saleLine = z.object({ drugId: idField, batchId: idField, quantity: quantity(), prescriptionItemId: optionalId });
+const saleLine = z.object({ drugId: idField, batchId: idField, quantity: quantity(), soldAs: z.enum(SOLD_AS).default("unit"), prescriptionItemId: optionalId });
 
 export const searchSellableAction = clinicAction(
   { name: "pharmacy.searchStock", permission: "pharmacy:sell", module: "pharmacy", schema: z.object({ query: z.string().max(100).default("") }) },
@@ -328,4 +335,110 @@ export const receiveOrderAction = clinicAction(
       }
       return result;
     }),
+);
+
+// ---------------------------------------------------------------------------
+// Supplier bills
+// ---------------------------------------------------------------------------
+
+/** Every item type, matched by any of its names, for bill entry. */
+export const searchBillItemsAction = clinicAction(
+  { name: "pharmacy.searchItems", permission: "stock:manage", module: "pharmacy", schema: z.object({ query: z.string().max(200).default("") }) },
+  async ({ db }, input) => db((tx) => searchItems(tx, input.query, { limit: 12 })),
+);
+
+const billLine = z.object({
+  drugId: idField,
+  description: z.string().trim().max(200).default(""),
+  batchNo: batchField,
+  expiryDate: expiryField,
+  quantity: quantity("Quantity"),
+  freeQuantity: z.coerce.number({ message: "Free must be a number" }).int("Whole packs only").min(0).max(100000).default(0),
+  packSize: z.coerce.number({ message: "Units per pack must be a number" }).int("Whole units only").min(1, "At least 1").max(10000),
+  rate: z.string({ message: "Rate is required" }).trim().regex(/^\d{1,8}(\.\d{1,2})?$/, "Enter the rate like 45 or 45.50"),
+  mrp: optionalMoney,
+  gstRate: z.coerce.number().refine((v) => (GST_RATES as readonly number[]).includes(v), "Choose a GST rate"),
+  rememberName: checkbox,
+});
+
+export const enterBillAction = clinicAction(
+  {
+    name: "pharmacy.enterBill",
+    permission: "stock:manage",
+    module: "pharmacy",
+    schema: z.object({
+      supplierId: idField,
+      billNo: requiredText(60, "Bill number"),
+      billDate: z.string({ message: "Bill date is required" }).refine(isValidDateString, "Enter the bill date"),
+      notes: optionalText(500),
+      updatePrices: checkbox,
+      lines: z.array(billLine).min(1, "Add at least one line").max(MAX_BILL_LINES),
+      idempotencyKey,
+    }),
+  },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const { result, replayed } = await enterBill(tx, session.clinicId, input, session.userId, todayInTimeZone(session.timezone));
+      if (!replayed) {
+        await audit(tx, {
+          action: "PURCHASE_BILL_ENTERED",
+          targetType: "purchase_bill",
+          targetId: result.billId,
+          details: { number: result.number, billNo: input.billNo, lines: result.lines, units: result.units, total: result.total, namesLearned: result.learned.length },
+        });
+      }
+      return result;
+    }),
+);
+
+// ---------------------------------------------------------------------------
+// Items and opening stock import
+// ---------------------------------------------------------------------------
+
+const stockFile = {
+  fileName: z.string().trim().min(1).max(200),
+  csv: z.string().min(1, "Choose a CSV file").max(MAX_IMPORT_BYTES, "The file is larger than 2 MB. Split it."),
+};
+const importPermission = ["stock:manage", "medicine:manage"] as const;
+
+export const checkStockImportAction = clinicAction(
+  { name: "pharmacy.checkStockImport", permission: importPermission, module: "pharmacy", schema: z.object(stockFile) },
+  async ({ session, db }, input) => db((tx) => checkStockImport(tx, input.csv, todayInTimeZone(session.timezone))),
+);
+
+export type StockImportOutcome =
+  | { status: "imported"; newItems: number; batches: number; units: number }
+  | { status: "rejected"; report: StockImportReport };
+
+/** All or nothing: any problem means no item and no stock is added. */
+export const runStockImportAction = clinicAction(
+  {
+    name: "pharmacy.runStockImport",
+    permission: importPermission,
+    module: "pharmacy",
+    schema: z.object({ ...stockFile, idempotencyKey }),
+  },
+  async ({ session, db, audit }, input): Promise<StockImportOutcome> => {
+    const today = todayInTimeZone(session.timezone);
+    const report = await db((tx) => checkStockImport(tx, input.csv, today));
+    if (report.problems.length > 0) {
+      await db(async (tx) => {
+        await recordRejectedStockImport(tx, session.clinicId, input.fileName, report, session.userId);
+        await audit(tx, { action: "STOCK_IMPORT_REJECTED", targetType: "import", severity: "warning", details: { file: input.fileName, rows: report.rows, problems: report.problems.length } });
+      });
+      return { status: "rejected", report };
+    }
+    return db(async (tx) => {
+      const { result, replayed } = await runStockImport(tx, session.clinicId, input, session.userId, today);
+      if (!replayed) {
+        await audit(tx, {
+          action: "STOCK_IMPORT_COMPLETED",
+          targetType: "import",
+          targetId: result.jobId,
+          details: { file: input.fileName, newItems: result.newItems, batches: result.batches, units: result.units },
+        });
+      }
+      return { status: "imported", newItems: result.newItems, batches: result.batches, units: result.units };
+    });
+  },
 );

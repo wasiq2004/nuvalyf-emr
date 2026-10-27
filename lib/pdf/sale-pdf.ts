@@ -5,6 +5,7 @@ import "server-only";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { PAYMENT_METHOD_LABELS, type PaymentMethod } from "@/features/billing/billing-rules";
+import { describeQuantity } from "@/features/pharmacy/selling-rules";
 import { ACCENT, Letter, MARGIN, MUTED, type Letterhead } from "./letter";
 
 export type SaleForPdf = {
@@ -16,7 +17,19 @@ export type SaleForPdf = {
   method: string;
   reference: string | null;
   prescriptionId: string | null;
-  items: { description: string; batchNo: string; expiryDate: string; quantity: number; unitPrice: string; amount: string }[];
+  items: {
+    description: string;
+    batchNo: string;
+    expiryDate: string;
+    /** Units; with soldAs "pack", `packs` strips of `packSize`. */
+    quantity: number;
+    soldAs: string;
+    packs: number | null;
+    packSize: number;
+    form: string;
+    unitPrice: string;
+    amount: string;
+  }[];
 };
 
 export async function renderSalePdf(sale: SaleForPdf, clinic: Letterhead, currency: string, timezone: string): Promise<Uint8Array> {
@@ -31,21 +44,21 @@ export async function renderSalePdf(sale: SaleForPdf, clinic: Letterhead, curren
   pdf.text(sale.prescriptionId ? "Against a prescription" : "Counter sale", { size: 9, color: MUTED });
   pdf.rule(18);
 
-  const qtyX = MARGIN + 290;
-  const priceEdge = MARGIN + 400;
+  const qtyX = MARGIN + 240;
+  const priceEdge = MARGIN + 410;
   const amountEdge = MARGIN + pdf.contentWidth;
   const header = pdf.y - 9;
   pdf.page.drawText("Medicine / batch", { x: MARGIN, y: header, size: 8.5, font: pdf.bold, color: MUTED });
   pdf.page.drawText("Qty", { x: qtyX, y: header, size: 8.5, font: pdf.bold, color: MUTED });
-  pdf.right("Price", header, { size: 8.5, font: pdf.bold, color: MUTED, rightEdge: priceEdge });
+  pdf.right("Price each", header, { size: 8.5, font: pdf.bold, color: MUTED, rightEdge: priceEdge });
   pdf.right("Amount", header, { size: 8.5, font: pdf.bold, color: MUTED, rightEdge: amountEdge });
   pdf.y -= 16;
   for (const item of sale.items) {
     pdf.ensure(28);
     const baseline = pdf.y - 10;
-    pdf.text(item.description, { size: 10, width: 270, gap: 2 });
+    pdf.text(item.description, { size: 10, width: 230, gap: 2 });
     pdf.text(`Batch ${item.batchNo} · Exp ${formatDate(item.expiryDate, "UTC")}`, { size: 8, color: MUTED, gap: 4 });
-    pdf.page.drawText(String(item.quantity), { x: qtyX, y: baseline, size: 10, font: pdf.regular });
+    pdf.page.drawText(describeQuantity(item, item.form), { x: qtyX, y: baseline, size: 9, font: pdf.regular });
     pdf.right(money(item.unitPrice), baseline, { size: 10, rightEdge: priceEdge });
     pdf.right(money(item.amount), baseline, { size: 10, rightEdge: amountEdge });
     pdf.y -= 2;

@@ -2,7 +2,7 @@
 // (lib/catalog/starter) and can add, edit or deactivate any entry. Rows that
 // came from the starter list keep their `starter_key`, so importing newer
 // starter entries never duplicates or resurrects anything.
-import { boolean, check, foreignKey, integer, numeric, primaryKey, text, unique, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, numeric, primaryKey, text, unique, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
 import { clinics } from "./platform";
@@ -13,7 +13,12 @@ export const drugs = appSchema.table(
     id: id(),
     clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
     starterKey: varchar("starter_key", { length: 80 }),
+    /** medicine (prescribable), consumable (needles, gauze) or instrument. */
+    itemType: varchar("item_type", { length: 20 }).notNull().default("medicine"),
     name: varchar("name", { length: 200 }).notNull(),
+    manufacturer: varchar("manufacturer", { length: 120 }),
+    /** Units in one pack as suppliers sell it (a strip of 10 = 10); pre-fills bills. */
+    packSize: integer("pack_size").notNull().default(1),
     genericName: varchar("generic_name", { length: 200 }).notNull(),
     form: varchar("form", { length: 30 }).notNull(),
     strength: varchar("strength", { length: 60 }),
@@ -24,6 +29,8 @@ export const drugs = appSchema.table(
     defaultInstructions: varchar("default_instructions", { length: 200 }),
     /** Selling price per unit (pharmacy module). */
     price: numeric("price", { precision: 10, scale: 2 }),
+    /** Selling price per pack (a strip's MRP). Empty: units x unit price. */
+    packPrice: numeric("pack_price", { precision: 10, scale: 2 }),
     /** Alert when stock on hand falls to this level (pharmacy module). */
     reorderLevel: integer("reorder_level").notNull().default(0),
     isActive: boolean("is_active").notNull().default(true),
@@ -34,6 +41,33 @@ export const drugs = appSchema.table(
     unique("drugs_clinic_id_id_key").on(t.clinicId, t.id),
     uniqueIndex("drugs_clinic_starter_idx").on(t.clinicId, t.starterKey),
     check("drugs_form_check", sql`${t.form} IN ('tablet', 'capsule', 'syrup', 'suspension', 'injection', 'ointment', 'cream', 'drops', 'inhaler', 'sachet', 'gel', 'other')`),
+    check("drugs_item_type_check", sql`${t.itemType} IN ('medicine', 'consumable', 'instrument')`),
+    check("drugs_pack_size_check", sql`${t.packSize} BETWEEN 1 AND 10000`),
+  ],
+);
+
+/**
+ * Other names an item is known by: a supplier's spelling, another company's
+ * brand of the same product. Learned when a person confirms a match on a
+ * supplier bill or listed in an import; matching uses `normalized`
+ * (features/catalog/item-rules.ts), which is unique in a clinic.
+ */
+export const drugAliases = appSchema.table(
+  "drug_aliases",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    drugId: uuid("drug_id").notNull(),
+    alias: varchar("alias", { length: 200 }).notNull(),
+    normalized: varchar("normalized", { length: 200 }).notNull(),
+    manufacturer: varchar("manufacturer", { length: 120 }),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ name: "drug_aliases_drug_fk", columns: [t.clinicId, t.drugId], foreignColumns: [drugs.clinicId, drugs.id] }),
+    uniqueIndex("drug_aliases_normalized_idx").on(t.clinicId, t.normalized),
+    index("drug_aliases_drug_idx").on(t.clinicId, t.drugId),
   ],
 );
 

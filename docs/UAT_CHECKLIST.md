@@ -100,6 +100,13 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 7.6 | Stock received, adjusted and written off; the ledger explains the on-hand figure | ✓ | | |
 | 7.7 | Purchase order: the person who raised it cannot approve it; receiving adds stock | ✓ | | |
 | 7.8 | A physical stock count of 10 medicines matches NuvaLyf | ✓ | | |
+| 7.9 | A real supplier bill is typed in: totals match the paper bill to the paisa; stock rises by (qty + free) × units per pack | ✓ | | |
+| 7.10 | An item new to the clinic (e.g. a needle) is added from the bill as a consumable; it cannot be prescribed | ✓ | | |
+| 7.11 | A second supplier's spelling of the same item is found, remembered, and found directly on the next bill | ✓ | | |
+| 7.12 | The same bill number from the same supplier is refused the second time | ✓ | | |
+| 7.13 | The old software's item list and stock imported from CSV; a file with a bad row imports nothing | ✓ | | |
+| 7.14 | Counter sale of whole strips and loose tablets in one sale: strip at its MRP, tablets at the tablet price; stock falls by the right number of tablets | ✓ | | |
+| 7.15 | A strip cannot be dispensed against a course shorter than the strip; loose tablets can | ✓ | | |
 
 ## 8. Messaging (if in plan)
 

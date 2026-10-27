@@ -132,6 +132,8 @@ export const importJobs = appSchema.table(
   {
     id: id(),
     clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    /** patients (register import) or stock (items and opening stock). */
+    kind: varchar("kind", { length: 20 }).notNull().default("patients"),
     fileName: varchar("file_name", { length: 200 }).notNull(),
     rowCount: integer("row_count").notNull(),
     imported: integer("imported").notNull().default(0),
@@ -141,5 +143,8 @@ export const importJobs = appSchema.table(
     createdBy: uuid("created_by").notNull(),
     createdAt: createdAt(),
   },
-  (t) => [check("import_jobs_status_check", sql`${t.status} IN ('rejected', 'imported')`)],
+  (t) => [
+    check("import_jobs_status_check", sql`${t.status} IN ('rejected', 'imported')`),
+    check("import_jobs_kind_check", sql`${t.kind} IN ('patients', 'stock')`),
+  ],
 );

@@ -17,6 +17,8 @@ import {
   vitalRanges,
 } from "@/lib/db/schema";
 import { AppError, isUniqueViolation } from "@/lib/errors";
+import type { ItemType } from "./item-rules";
+import { aliasesFor } from "./items.service";
 
 const money = (v: string | undefined) => (v === undefined ? null : v);
 const decimal = (v: number | null | undefined) => (v === null || v === undefined ? null : String(v));
@@ -27,8 +29,14 @@ const decimal = (v: number | null | undefined) => (v === null || v === undefined
 
 export type DrugInput = {
   name: string;
-  genericName: string;
+  /** Default medicine. */
+  itemType?: ItemType;
+  /** Optional for consumables and instruments (the name is used). */
+  genericName?: string;
   form: string;
+  manufacturer?: string;
+  /** Default 1. */
+  packSize?: number;
   strength?: string;
   category?: string;
   defaultDose?: string;
@@ -36,13 +44,24 @@ export type DrugInput = {
   defaultDurationDays: number | null;
   defaultInstructions?: string;
   price?: string;
+  /** Price of a whole pack (a strip's MRP). */
+  packPrice?: string;
   allergyClassIds: string[];
 };
 
 export async function listDrugs(tx: Tx, query: string) {
   const term = query.trim().replace(/[%_\\]/g, "");
-  const where: SQL | undefined = term ? or(ilike(drugs.name, `%${term}%`), ilike(drugs.genericName, `%${term}%`), ilike(drugs.category, `%${term}%`)) : undefined;
+  const where: SQL | undefined = term
+    ? or(
+        ilike(drugs.name, `%${term}%`),
+        ilike(drugs.genericName, `%${term}%`),
+        ilike(drugs.category, `%${term}%`),
+        ilike(drugs.manufacturer, `%${term}%`),
+        sql`exists (select 1 from app.drug_aliases a where a.drug_id = ${drugs.id} and a.alias ilike ${`%${term}%`})`,
+      )
+    : undefined;
   const rows = await tx.select().from(drugs).where(where).orderBy(sql`${drugs.isActive} desc`, asc(drugs.name));
+  const aliases = await aliasesFor(tx, rows.map((r) => r.id));
   const links = rows.length
     ? await tx
         .select({ drugId: drugAllergyClasses.drugId, id: allergyClasses.id, name: allergyClasses.name })
@@ -50,7 +69,11 @@ export async function listDrugs(tx: Tx, query: string) {
         .innerJoin(allergyClasses, eq(allergyClasses.id, drugAllergyClasses.allergyClassId))
         .where(inArray(drugAllergyClasses.drugId, rows.map((r) => r.id)))
     : [];
-  return rows.map((r) => ({ ...r, classes: links.filter((l) => l.drugId === r.id).map((l) => ({ id: l.id, name: l.name })) }));
+  return rows.map((r) => ({
+    ...r,
+    classes: links.filter((l) => l.drugId === r.id).map((l) => ({ id: l.id, name: l.name })),
+    aliases: aliases.get(r.id) ?? [],
+  }));
 }
 
 async function setDrugClasses(tx: Tx, clinicId: string, drugId: string, classIds: string[]) {
@@ -61,23 +84,31 @@ async function setDrugClasses(tx: Tx, clinicId: string, drugId: string, classIds
 }
 
 function drugValues(input: DrugInput) {
+  const itemType = input.itemType ?? "medicine";
+  const medicine = itemType === "medicine";
+  if (medicine && !input.genericName) throw new AppError("A medicine needs its generic name.");
   return {
     name: input.name,
-    genericName: input.genericName,
+    itemType,
+    genericName: input.genericName || input.name,
     form: input.form,
+    manufacturer: input.manufacturer ?? null,
+    packSize: input.packSize ?? 1,
     strength: input.strength ?? null,
     category: input.category ?? null,
-    defaultDose: input.defaultDose ?? null,
-    defaultFrequency: input.defaultFrequency ?? null,
-    defaultDurationDays: input.defaultDurationDays,
-    defaultInstructions: input.defaultInstructions ?? null,
+    // Prescribing defaults only mean something for medicines.
+    defaultDose: medicine ? (input.defaultDose ?? null) : null,
+    defaultFrequency: medicine ? (input.defaultFrequency ?? null) : null,
+    defaultDurationDays: medicine ? input.defaultDurationDays : null,
+    defaultInstructions: medicine ? (input.defaultInstructions ?? null) : null,
     price: money(input.price),
+    packPrice: (input.packSize ?? 1) > 1 ? money(input.packPrice) : null,
   };
 }
 
 export async function createDrug(tx: Tx, clinicId: string, input: DrugInput) {
   const [row] = await tx.insert(drugs).values({ clinicId, ...drugValues(input) }).returning({ id: drugs.id });
-  await setDrugClasses(tx, clinicId, row.id, input.allergyClassIds);
+  await setDrugClasses(tx, clinicId, row.id, (input.itemType ?? "medicine") === "medicine" ? input.allergyClassIds : []);
   return row;
 }
 
@@ -88,7 +119,7 @@ export async function updateDrug(tx: Tx, clinicId: string, id: string, input: Dr
     .where(eq(drugs.id, id))
     .returning({ id: drugs.id });
   if (!row) throw new AppError("Medicine not found.");
-  await setDrugClasses(tx, clinicId, id, input.allergyClassIds);
+  await setDrugClasses(tx, clinicId, id, (input.itemType ?? "medicine") === "medicine" ? input.allergyClassIds : []);
   return row;
 }
 

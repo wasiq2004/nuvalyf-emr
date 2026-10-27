@@ -258,6 +258,18 @@ All eleven phases (0–10) of the implementation plan are built and verified. Me
 - [x] Clinic panel accent retuned to the logo's teal and green (`--brand-teal`, `--brand-green` in `globals.css`); compliance (sky) and console (violet) keep their own accents
 - [x] Technical identifiers unchanged (package, database roles, cookies, Docker project) so existing installs and sessions are unaffected
 
+## Client request: supplier bills & item names ✅
+
+From the client's voice notes (in-house pharmacy runs off supplier bills; companies name the same item differently).
+
+- [x] **Supplier bill entry** (`/pharmacy/purchases/bills/new`): supplier, bill number and date; lines with batch, expiry (MM/YY), packs, free packs, units per pack, rate, MRP and GST. Saving books (qty + free) × pack units through the stock ledger, records the bill (append-only) and can set selling prices from the MRP. One bill number per supplier; idempotent
+- [x] **Item types**: medicine, consumable, instrument. Only medicines can be prescribed; all are stocked and sold. Items also carry manufacturer and units per pack
+- [x] **Other names**: an item can be known by any number of names (unique per clinic). Search matches words in any order across name, generic, manufacturer and other names; a new spelling confirmed on a bill is remembered. A name can never point at two items
+- [x] **Items & opening stock import** (`/pharmacy/stock/import`): CSV with types, other names and batches; matches existing items by any name; all or nothing; idempotent
+- [x] Migration 0014; tests: 11 unit, 16 integration, 1 new e2e scenario (20 in total)
+- [x] **Selling by the strip and by the tablet** (client: "both"): each sale or dispensing line is loose units or packs. A pack sells at the item's pack price (set from the MRP on bills, editable, importable), so a strip costs exactly its MRP; stock always moves in units, and the course limit counts units. Receipts read "2 strips (30 tablets)". Migration 0015
+- Deferred, to decide with the client: photographing a bill to fill the form automatically
+
 ---
 
 ## Decisions log

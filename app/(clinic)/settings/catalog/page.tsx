@@ -24,6 +24,8 @@ import {
 import { PRESET_KIND_LABELS } from "@/features/catalog/catalog-options";
 import { VITAL_FIELDS } from "@/features/clinical/vital-rules";
 import { getClinicSettings } from "@/features/settings/settings.service";
+import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
+import { packWord } from "@/features/pharmacy/selling-rules";
 import {
   AllergyClassDialog,
   DiagnosisCodeDialog,
@@ -119,7 +121,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
   const activeClasses = data.classes.filter((c) => c.isActive).map((c) => ({ id: c.id, name: c.name }));
 
   const LABELS: Record<TabKey, string> = {
-    medicines: "Medicines",
+    medicines: "Medicines & supplies",
     interactions: "Interactions",
     allergies: "Allergy classes",
     presets: "Prescribing presets",
@@ -162,30 +164,30 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
       {data.kind === "medicines" && (
         <Panel
           flush
-          title="Medicines"
-          description="What doctors can prescribe. Defaults pre-fill the prescription; allergy classes drive the allergy check."
+          title="Medicines & supplies"
+          description="Everything the clinic stocks. Medicines can be prescribed (defaults pre-fill the prescription; allergy classes drive the allergy check); consumables and instruments are stocked and sold."
           actions={<DrugDialog classes={activeClasses} />}
         >
           <div className="px-6 pb-4 pt-2 lg:px-8">
-            <SearchBox tab="medicines" q={q} placeholder="Search name, generic or category" />
+            <SearchBox tab="medicines" q={q} placeholder="Search name, other name, generic, maker or category" />
           </div>
           <DataTable
             rows={data.drugs}
             rowKey={(d) => d.id}
-            empty={<EmptyState icon={Pill} title={q ? "No medicines match" : "No medicines yet"} />}
+            empty={<EmptyState icon={Pill} title={q ? "Nothing matches" : "No items yet"} />}
             columns={[
               {
                 key: "name",
-                header: "Medicine",
+                header: "Item",
                 cell: (d) => (
                   <div className={cn(!d.isActive && "opacity-60")}>
-                    <p className="flex items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
-                      {d.name} <Inactive active={d.isActive} />
+                    <p className="flex flex-wrap items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
+                      {d.name} <ItemTypeBadge type={d.itemType} /> <Inactive active={d.isActive} />
                     </p>
                     <p className="text-xs text-zinc-500">
-                      {d.genericName} · {d.form}
-                      {d.strength ? ` · ${d.strength}` : ""}
+                      {[d.itemType === "medicine" ? d.genericName : null, d.itemType === "medicine" ? d.form : null, d.strength, d.manufacturer].filter(Boolean).join(" · ") || "—"}
                     </p>
+                    {d.aliases.length > 0 && <p className="text-xs text-zinc-500">Also: {d.aliases.map((a) => a.alias).join(", ")}</p>}
                   </div>
                 ),
               },
@@ -202,7 +204,21 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
                 hideOnMobile: true,
                 cell: (d) => (d.classes.length ? d.classes.map((c) => c.name).join(", ") : "—"),
               },
-              { key: "price", header: "Price", hideOnMobile: true, cell: (d) => (d.price ? formatMoney(d.price, data.currency) : "—") },
+              {
+                key: "price",
+                header: "Price",
+                hideOnMobile: true,
+                cell: (d) => (
+                  <span className="tabular-nums">
+                    {d.price ? formatMoney(d.price, data.currency) : "—"}
+                    {d.packSize > 1 && d.packPrice && (
+                      <span className="block text-xs text-zinc-500">
+                        {formatMoney(d.packPrice, data.currency)} / {packWord(d.form)} of {d.packSize}
+                      </span>
+                    )}
+                  </span>
+                ),
+              },
               {
                 key: "actions",
                 header: "",
@@ -213,17 +229,22 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
                       classes={activeClasses}
                       values={{
                         id: d.id,
+                        itemType: d.itemType,
                         name: d.name,
                         genericName: d.genericName,
                         form: d.form,
                         strength: d.strength ?? "",
                         category: d.category ?? "",
+                        manufacturer: d.manufacturer ?? "",
+                        packSize: String(d.packSize),
                         defaultDose: d.defaultDose ?? "",
                         defaultFrequency: d.defaultFrequency ?? "",
                         defaultDurationDays: d.defaultDurationDays ? String(d.defaultDurationDays) : "",
                         defaultInstructions: d.defaultInstructions ?? "",
                         price: d.price ?? "",
+                        packPrice: d.packPrice ?? "",
                         allergyClassIds: d.classes.map((c) => c.id),
+                        aliases: d.aliases.map((a) => ({ id: a.id, alias: a.alias })),
                       }}
                     />
                     <DrugActiveToggle id={d.id} name={d.name} isActive={d.isActive} />

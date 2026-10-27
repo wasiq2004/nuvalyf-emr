@@ -12,12 +12,16 @@ import { buttonClass } from "@/components/app/buttons";
 import { closePrescriptionAction, dispenseAction, raiseQueryAction } from "@/features/pharmacy/pharmacy.actions";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { fromMinor, toMinor } from "@/lib/money";
+import { packWord, sellingPrice, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
 import { cn } from "@/lib/utils";
 
 type StockOption = {
   drugId: string;
   drugName: string;
+  form: string;
   price: string | null;
+  packPrice: string | null;
+  packSize: number;
   batchId: string;
   batchNo: string;
   expiryDate: string;
@@ -46,15 +50,18 @@ function defaultOption(item: DispenseItem) {
   return (prescribed.find((s) => s.quantity >= want) ?? prescribed[0] ?? item.stock.find((s) => s.quantity >= want) ?? item.stock[0])?.batchId ?? "";
 }
 
+const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
+
 export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescriptionId: string; items: DispenseItem[]; currencyFormat: { locale: string; currency: string } }) {
   const router = useRouter();
   const [key] = useState(() => crypto.randomUUID());
   const [pending, setPending] = useState(false);
   const [method, setMethod] = useState("cash");
   const [reference, setReference] = useState("");
-  const [choice, setChoice] = useState<Record<string, { batchId: string; quantity: string }>>(() =>
-    Object.fromEntries(items.map((i) => [i.id, { batchId: defaultOption(i), quantity: String(i.remaining ?? (i.dispensed > 0 ? 0 : 1)) }])),
+  const [choice, setChoice] = useState<Record<string, { batchId: string; quantity: string; soldAs: SoldAs }>>(() =>
+    Object.fromEntries(items.map((i) => [i.id, { batchId: defaultOption(i), quantity: String(i.remaining ?? (i.dispensed > 0 ? 0 : 1)), soldAs: "unit" as SoldAs }])),
   );
+  const set = (id: string, patch: Partial<{ batchId: string; quantity: string; soldAs: SoldAs }>) => setChoice((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
   const money = (minor: number) => new Intl.NumberFormat(currencyFormat.locale, { style: "currency", currency: currencyFormat.currency }).format(minor / 100);
 
@@ -65,7 +72,10 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
         const qty = Number(c?.quantity);
         const option = item.stock.find((s) => s.batchId === c?.batchId);
         if (!option || !Number.isInteger(qty) || qty <= 0) return [];
-        return [{ item, option, qty, amount: option.price ? toMinor(option.price) * qty : 0 }];
+        // Packs only for products that come in packs.
+        const soldAs: SoldAs = option.packSize > 1 ? c.soldAs : "unit";
+        const price = sellingPrice(option, soldAs);
+        return [{ item, option, qty, soldAs, units: unitsFor(qty, soldAs, option.packSize), amount: price ? toMinor(price) * qty : 0 }];
       }),
     [items, choice],
   );
@@ -78,7 +88,7 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
       method,
       reference,
       idempotencyKey: key,
-      lines: lines.map((l) => ({ drugId: l.option.drugId, batchId: l.option.batchId, quantity: l.qty, prescriptionItemId: l.item.id })),
+      lines: lines.map((l) => ({ drugId: l.option.drugId, batchId: l.option.batchId, quantity: l.qty, soldAs: l.soldAs, prescriptionItemId: l.item.id })),
     });
     if (!result.ok) {
       setPending(false);
@@ -96,6 +106,10 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
           const c = choice[item.id];
           const option = item.stock.find((s) => s.batchId === c?.batchId);
           const done = item.remaining === 0;
+          const line = lines.find((l) => l.item.id === item.id);
+          const soldAs: SoldAs = option && option.packSize > 1 ? c.soldAs : "unit";
+          const price = option ? sellingPrice(option, soldAs) : null;
+          const overCourse = line && item.remaining !== null && line.units > item.remaining;
           return (
             <li key={item.id} className={cn("rounded-2xl border p-4 sm:p-5", done ? "border-emerald-200 bg-emerald-50/50 dark:border-emerald-900 dark:bg-emerald-950/20" : "border-zinc-200 dark:border-zinc-800")}>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -125,13 +139,13 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
               ) : item.stock.length === 0 ? (
                 <p className="mt-3 text-sm font-medium text-red-600 dark:text-red-400">Out of stock (no usable batch of this medicine or its generic).</p>
               ) : (
-                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_7rem_8rem] sm:items-end">
+                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_9rem_6rem_8rem] sm:items-end">
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     Batch
                     <select
                       aria-label={`Batch for ${item.drugName}`}
                       value={c?.batchId ?? ""}
-                      onChange={(e) => setChoice((prev) => ({ ...prev, [item.id]: { ...prev[item.id], batchId: e.target.value } }))}
+                      onChange={(e) => set(item.id, { batchId: e.target.value })}
                       className={cn(inputClass, "mt-1.5 h-11")}
                     >
                       {item.stock.map((s) => (
@@ -143,21 +157,43 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
                     </select>
                   </label>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    Sell as
+                    {option && option.packSize > 1 ? (
+                      <select aria-label={`Sell ${item.drugName} as`} value={c.soldAs} onChange={(e) => set(item.id, { soldAs: e.target.value as SoldAs })} className={cn(inputClass, "mt-1.5 h-11")}>
+                        <option value="unit">{capitalize(unitWord(option.form, 2))}</option>
+                        <option value="pack">
+                          {capitalize(packWord(option.form, 2))} of {option.packSize}
+                        </option>
+                      </select>
+                    ) : (
+                      <span className="mt-1.5 flex h-11 items-center text-sm font-normal text-zinc-500">{capitalize(unitWord(option?.form ?? item.form, 2))}</span>
+                    )}
+                  </label>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                     Quantity
                     <input
                       aria-label={`Quantity of ${item.drugName}`}
                       type="number"
                       min={0}
-                      max={option?.quantity}
                       value={c?.quantity ?? ""}
-                      onChange={(e) => setChoice((prev) => ({ ...prev, [item.id]: { ...prev[item.id], quantity: e.target.value } }))}
+                      onChange={(e) => set(item.id, { quantity: e.target.value })}
                       className={cn(inputClass, "mt-1.5 h-11")}
                     />
                   </label>
                   <p className="pb-2.5 text-right text-sm tabular-nums text-zinc-700 dark:text-zinc-300">
-                    {option?.price ? money(toMinor(option.price) * (Number(c?.quantity) || 0)) : <span className="text-red-600">No price set</span>}
+                    {price ? money(toMinor(price) * (Number(c?.quantity) || 0)) : <span className="text-red-600">No price set</span>}
                   </p>
-                  {option && !option.prescribed && <p className="text-xs text-amber-700 sm:col-span-3 dark:text-amber-400">Substitute: same generic, different product.</p>}
+                  {line && line.soldAs === "pack" && (
+                    <p className="text-xs text-zinc-500 sm:col-span-4">
+                      = {line.units} {unitWord(line.option.form, line.units)}
+                    </p>
+                  )}
+                  {overCourse && (
+                    <p className="text-xs font-medium text-red-600 sm:col-span-4 dark:text-red-400">
+                      More than the {item.remaining} left on the course. Sell loose, or ask the doctor.
+                    </p>
+                  )}
+                  {option && !option.prescribed && <p className="text-xs text-amber-700 sm:col-span-4 dark:text-amber-400">Substitute: same generic, different product.</p>}
                 </div>
               )}
             </li>
@@ -187,7 +223,12 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
             <span className="block text-xs uppercase tracking-wider text-zinc-500">Total</span>
             <span className="text-2xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">{money(total)}</span>
           </p>
-          <button type="button" onClick={submit} disabled={pending || lines.length === 0} className={buttonClass("primary", "lg")}>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={pending || lines.length === 0 || lines.some((l) => l.item.remaining !== null && l.units > l.item.remaining)}
+            className={buttonClass("primary", "lg")}
+          >
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Dispense &amp; take {fromMinor(total) === "0.00" ? "payment" : money(total)}
           </button>

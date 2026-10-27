@@ -11,6 +11,7 @@ import { formatDate, formatDateTime } from "@/lib/format";
 import { formatMoney } from "@/lib/money";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { getSale } from "@/features/pharmacy/sales.service";
+import { describeQuantity, packWord, unitWord } from "@/features/pharmacy/selling-rules";
 import { PAYMENT_METHOD_LABELS, type PaymentMethod } from "@/features/billing/billing-rules";
 
 export const metadata = { title: "Pharmacy receipt" };
@@ -71,8 +72,14 @@ export default async function SalePage({ params }: { params: Promise<{ id: strin
                 </div>
               ),
             },
-            { key: "qty", header: "Qty", align: "right", cell: (i) => i.quantity },
-            { key: "price", header: "Price", align: "right", hideOnMobile: true, cell: (i) => money(i.unitPrice) },
+            { key: "qty", header: "Qty", align: "right", cell: (i) => describeQuantity(i, i.form) },
+            {
+              key: "price",
+              header: "Price",
+              align: "right",
+              hideOnMobile: true,
+              cell: (i) => `${money(i.unitPrice)} / ${i.soldAs === "pack" ? packWord(i.form) : unitWord(i.form)}`,
+            },
             { key: "amount", header: "Amount", align: "right", cell: (i) => <span className="font-medium">{money(i.amount)}</span> },
           ]}
         />

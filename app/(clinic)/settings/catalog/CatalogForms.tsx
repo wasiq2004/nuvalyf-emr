@@ -1,12 +1,15 @@
 "use client";
 
-import { Download, Pencil, Plus, Star } from "lucide-react";
+import { useState } from "react";
+import { Download, Pencil, Plus, Star, X } from "lucide-react";
 import { toast } from "sonner";
 import { ActionForm, CheckboxCard, Field, SelectInput, SubmitButton, TextArea, TextInput } from "@/components/app/form";
 import { ConfirmAction, FormDialog } from "@/components/app/dialogs";
 import { ActionButton } from "@/components/app/action-button";
 import {
+  addItemAliasAction,
   importStarterAction,
+  removeItemAliasAction,
   saveAllergyClassAction,
   saveDiagnosisCodeAction,
   saveDrugAction,
@@ -19,6 +22,7 @@ import {
   setDrugActiveAction,
 } from "@/features/catalog/catalog.actions";
 import { DRUG_FORMS, PRESET_KIND_LABELS, PRESET_KINDS, SEVERITIES, capitalize } from "@/features/catalog/catalog-options";
+import { ITEM_TYPE_LABELS, ITEM_TYPES, isItemType, type ItemType } from "@/features/catalog/item-rules";
 import { VITAL_FIELDS } from "@/features/clinical/vital-rules";
 
 function DialogTrigger({ editing, label }: { editing: boolean; label: string }) {
@@ -45,83 +49,146 @@ function Footer({ editing }: { editing: boolean }) {
 
 export type DrugValues = {
   id: string;
+  itemType: string;
   name: string;
   genericName: string;
   form: string;
   strength: string;
   category: string;
+  manufacturer: string;
+  packSize: string;
   defaultDose: string;
   defaultFrequency: string;
   defaultDurationDays: string;
   defaultInstructions: string;
   price: string;
+  packPrice: string;
   allergyClassIds: string[];
+  aliases: { id: string; alias: string }[];
 };
 
 export function DrugDialog({ values, classes }: { values?: DrugValues; classes: { id: string; name: string }[] }) {
   const editing = Boolean(values);
+  const [type, setType] = useState<ItemType>(values && isItemType(values.itemType) ? values.itemType : "medicine");
+  const medicine = type === "medicine";
   return (
     <FormDialog
       wide
       variant={editing ? "ghost" : "primary"}
       size={editing ? "sm" : "md"}
-      trigger={<DialogTrigger editing={editing} label={editing ? values!.name : "Add medicine"} />}
-      title={editing ? `Edit ${values!.name}` : "Add a medicine"}
-      description="Changes apply to new prescriptions. Signed prescriptions keep what was printed."
+      trigger={<DialogTrigger editing={editing} label={editing ? values!.name : "Add item"} />}
+      title={editing ? `Edit ${values!.name}` : "Add an item"}
+      description="Medicines can be prescribed; consumables and instruments are only stocked and sold. Changes apply from now on: signed prescriptions keep what was printed."
     >
       {(close) => (
-        <ActionForm action={saveDrugAction} successMessage={editing ? "Medicine updated" : "Medicine added"} onSuccess={close}>
-          <input type="hidden" name="id" value={values?.id ?? ""} />
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field label="Name (as prescribed)" name="name" required>
-              <TextInput name="name" defaultValue={values?.name} placeholder="e.g. Paracetamol 650" />
-            </Field>
-            <Field label="Generic name" name="genericName" required hint="Combinations: join with +, e.g. Amoxicillin + Clavulanic acid.">
-              <TextInput name="genericName" defaultValue={values?.genericName} />
-            </Field>
-            <Field label="Form" name="form" required>
-              <SelectInput name="form" defaultValue={values?.form ?? "tablet"} options={DRUG_FORMS.map((f) => ({ value: f, label: capitalize(f) }))} />
-            </Field>
-            <Field label="Strength" name="strength">
-              <TextInput name="strength" defaultValue={values?.strength} placeholder="e.g. 500 mg" />
-            </Field>
-            <Field label="Category" name="category">
-              <TextInput name="category" defaultValue={values?.category} placeholder="e.g. Antibiotic" />
-            </Field>
-            <Field label="Price per unit" name="price" hint="Used by the pharmacy.">
-              <TextInput name="price" inputMode="decimal" defaultValue={values?.price} />
-            </Field>
-          </div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Defaults when prescribing</p>
-          <div className="grid gap-5 sm:grid-cols-3">
-            <Field label="Dose" name="defaultDose">
-              <TextInput name="defaultDose" defaultValue={values?.defaultDose} placeholder="1 tablet" />
-            </Field>
-            <Field label="Frequency" name="defaultFrequency">
-              <TextInput name="defaultFrequency" defaultValue={values?.defaultFrequency} placeholder="BD" />
-            </Field>
-            <Field label="Duration (days)" name="defaultDurationDays">
-              <TextInput name="defaultDurationDays" type="number" min={1} max={365} defaultValue={values?.defaultDurationDays} />
-            </Field>
-          </div>
-          <Field label="Instructions" name="defaultInstructions">
-            <TextInput name="defaultInstructions" defaultValue={values?.defaultInstructions} placeholder="After food" />
-          </Field>
-          {classes.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Allergy classes</p>
-              <p className="text-xs text-zinc-500">A patient allergic to a class is warned about every medicine in it.</p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {classes.map((c) => (
-                  <CheckboxCard key={c.id} name="allergyClassIds" value={c.id} label={c.name} defaultChecked={values?.allergyClassIds.includes(c.id)} />
-                ))}
-              </div>
+        <>
+          <ActionForm action={saveDrugAction} successMessage={editing ? "Item updated" : "Item added"} onSuccess={close}>
+            <input type="hidden" name="id" value={values?.id ?? ""} />
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Type" name="itemType" required>
+                <SelectInput name="itemType" value={type} onChange={(e) => setType(e.target.value as ItemType)} options={ITEM_TYPES.map((t) => ({ value: t, label: ITEM_TYPE_LABELS[t] }))} />
+              </Field>
+              <Field label={medicine ? "Name (as prescribed)" : "Name"} name="name" required>
+                <TextInput name="name" defaultValue={values?.name} placeholder={medicine ? "e.g. Paracetamol 650" : "e.g. Clinic needle 24G"} />
+              </Field>
+              {medicine && (
+                <>
+                  <Field label="Generic name" name="genericName" required hint="Combinations: join with +, e.g. Amoxicillin + Clavulanic acid.">
+                    <TextInput name="genericName" defaultValue={values?.genericName} />
+                  </Field>
+                  <Field label="Form" name="form" required>
+                    <SelectInput name="form" defaultValue={values?.form ?? "tablet"} options={DRUG_FORMS.map((f) => ({ value: f, label: capitalize(f) }))} />
+                  </Field>
+                </>
+              )}
+              <Field label="Strength / size" name="strength">
+                <TextInput name="strength" defaultValue={values?.strength} placeholder={medicine ? "e.g. 500 mg" : "e.g. 24G"} />
+              </Field>
+              <Field label="Manufacturer" name="manufacturer">
+                <TextInput name="manufacturer" defaultValue={values?.manufacturer} />
+              </Field>
+              <Field label="Category" name="category">
+                <TextInput name="category" defaultValue={values?.category} placeholder={medicine ? "e.g. Antibiotic" : "e.g. Dressing"} />
+              </Field>
+              <Field label="Units per pack" name="packSize" required hint="As suppliers sell it: a strip of 10 = 10.">
+                <TextInput name="packSize" type="number" min={1} defaultValue={values?.packSize ?? "1"} />
+              </Field>
+              <Field label="Price per unit" name="price" hint="When sold loose (one tablet, one needle).">
+                <TextInput name="price" inputMode="decimal" defaultValue={values?.price} />
+              </Field>
+              <Field label="Price per pack" name="packPrice" hint="A whole strip or pack, e.g. its MRP. Empty: units × price per unit.">
+                <TextInput name="packPrice" inputMode="decimal" defaultValue={values?.packPrice} />
+              </Field>
             </div>
-          )}
-          <Footer editing={editing} />
-        </ActionForm>
+            {medicine && (
+              <>
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Defaults when prescribing</p>
+                <div className="grid gap-5 sm:grid-cols-3">
+                  <Field label="Dose" name="defaultDose">
+                    <TextInput name="defaultDose" defaultValue={values?.defaultDose} placeholder="1 tablet" />
+                  </Field>
+                  <Field label="Frequency" name="defaultFrequency">
+                    <TextInput name="defaultFrequency" defaultValue={values?.defaultFrequency} placeholder="BD" />
+                  </Field>
+                  <Field label="Duration (days)" name="defaultDurationDays">
+                    <TextInput name="defaultDurationDays" type="number" min={1} max={365} defaultValue={values?.defaultDurationDays} />
+                  </Field>
+                </div>
+                <Field label="Instructions" name="defaultInstructions">
+                  <TextInput name="defaultInstructions" defaultValue={values?.defaultInstructions} placeholder="After food" />
+                </Field>
+                {classes.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Allergy classes</p>
+                    <p className="text-xs text-zinc-500">A patient allergic to a class is warned about every medicine in it.</p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {classes.map((c) => (
+                        <CheckboxCard key={c.id} name="allergyClassIds" value={c.id} label={c.name} defaultChecked={values?.allergyClassIds.includes(c.id)} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            <Footer editing={editing} />
+          </ActionForm>
+          {values && <OtherNames drugId={values.id} name={values.name} aliases={values.aliases} />}
+        </>
       )}
     </FormDialog>
+  );
+}
+
+/** Other names the item is known by (suppliers' spellings, other brands). */
+function OtherNames({ drugId, name, aliases }: { drugId: string; name: string; aliases: { id: string; alias: string }[] }) {
+  return (
+    <div className="mt-6 space-y-3 border-t border-zinc-100 pt-5 dark:border-zinc-800">
+      <div>
+        <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Other names</p>
+        <p className="text-xs text-zinc-500">Supplier bills, imports and searches also find {name} by these names.</p>
+      </div>
+      {aliases.length > 0 && (
+        <ul className="flex flex-wrap gap-2">
+          {aliases.map((a) => (
+            <li key={a.id} className="inline-flex items-center gap-1 rounded-full border border-zinc-200 py-0.5 pl-3 pr-1 text-sm dark:border-zinc-700">
+              {a.alias}
+              <ActionButton action={removeItemAliasAction} input={{ id: a.id }} variant="ghost" className="h-6 px-1.5" aria-label={`Remove other name ${a.alias}`} successMessage="Name removed">
+                <X className="h-3.5 w-3.5" />
+              </ActionButton>
+            </li>
+          ))}
+        </ul>
+      )}
+      <ActionForm action={addItemAliasAction} successMessage="Name added" resetOnSuccess>
+        <input type="hidden" name="drugId" value={drugId} />
+        <div className="flex gap-2">
+          <div className="min-w-0 flex-1">
+            <TextInput name="alias" aria-label={`Another name for ${name}`} placeholder="e.g. how a supplier writes it" />
+          </div>
+          <SubmitButton variant="secondary">Add name</SubmitButton>
+        </div>
+      </ActionForm>
+    </div>
   );
 }
 
@@ -133,12 +200,12 @@ export function DrugActiveToggle({ id, name, isActive }: { id: string; name: str
       variant="ghost"
       trigger="Deactivate"
       title={`Deactivate ${name}?`}
-      description="It disappears from prescribing search. Past prescriptions are not affected, and you can reactivate it any time."
+      description="It disappears from prescribing, bills and sales searches. Past records are not affected, and you can reactivate it any time."
       confirmLabel="Deactivate"
-      successMessage="Medicine deactivated"
+      successMessage="Item deactivated"
     />
   ) : (
-    <ActionButton action={setDrugActiveAction} input={{ id, isActive: true }} variant="ghost" successMessage="Medicine reactivated">
+    <ActionButton action={setDrugActiveAction} input={{ id, isActive: true }} variant="ghost" successMessage="Item reactivated">
       Reactivate
     </ActionButton>
   );

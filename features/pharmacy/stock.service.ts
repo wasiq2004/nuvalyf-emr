@@ -40,10 +40,14 @@ export async function moveStock(
 export type StockRow = {
   drugId: string;
   name: string;
+  itemType: string;
+  manufacturer: string | null;
   genericName: string;
   form: string;
   strength: string | null;
   price: string | null;
+  packPrice: string | null;
+  packSize: number;
   reorderLevel: number;
   isActive: boolean;
   onHand: number;
@@ -74,10 +78,14 @@ export async function listStock(tx: Tx, today: string, now = new Date()): Promis
       return {
         drugId: d.id,
         name: d.name,
+        itemType: d.itemType,
+        manufacturer: d.manufacturer,
         genericName: d.genericName,
         form: d.form,
         strength: d.strength,
         price: d.price,
+        packPrice: d.packPrice,
+        packSize: d.packSize,
         reorderLevel: d.reorderLevel,
         isActive: d.isActive,
         onHand,

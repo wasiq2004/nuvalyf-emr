@@ -24,7 +24,7 @@ export default async function ImportPage() {
         title="Import patients"
         description="Bring an existing register in from a spreadsheet. The whole file is checked first; if any row has a problem, nothing is imported."
         actions={
-          <a href={template} download="medflow-patients-template.csv" className={buttonClass("secondary", "md")}>
+          <a href={template} download="nuvalyf-patients-template.csv" className={buttonClass("secondary", "md")}>
             <Download className="h-4 w-4" /> Template CSV
           </a>
         }

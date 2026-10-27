@@ -9,7 +9,8 @@ export const A4 = { width: 595.28, height: 841.89 };
 export const MARGIN = 50;
 export const INK = rgb(0.1, 0.1, 0.12);
 export const MUTED = rgb(0.42, 0.42, 0.46);
-export const ACCENT = rgb(0.11, 0.39, 0.85);
+/** NuvaLyf brand teal (#0b7a78), as in globals.css. */
+export const ACCENT = rgb(11 / 255, 122 / 255, 120 / 255);
 const RULE = rgb(0.85, 0.86, 0.88);
 
 export type Letterhead = {

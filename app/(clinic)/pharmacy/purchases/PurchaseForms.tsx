@@ -63,6 +63,7 @@ export function NewOrderDialog({ suppliers }: { suppliers: { id: string; name: s
   const router = useRouter();
   return (
     <FormDialog
+      variant="secondary"
       trigger={
         <>
           <Plus className="h-4 w-4" /> New order

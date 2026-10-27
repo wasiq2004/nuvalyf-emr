@@ -1,7 +1,7 @@
 "use client";
 
 // Over-the-counter sale: search stock, build a basket (earliest-expiry batch
-// by default), take payment. The sale is sent once with its own key, so a
+// by default), loose or by the strip, take payment. The sale is sent once with its own key, so a
 // double-click or a retry never sells twice.
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -14,9 +14,12 @@ import { counterSaleAction, searchSellableAction } from "@/features/pharmacy/pha
 import type { SellableDrug } from "@/features/pharmacy/sales.service";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { toMinor } from "@/lib/money";
+import { packWord, sellingPrice, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
 import { cn } from "@/lib/utils";
 
-type Line = { drug: SellableDrug; batchId: string; quantity: string };
+type Line = { drug: SellableDrug; batchId: string; quantity: string; soldAs: SoldAs };
+
+const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
 
 export function CounterSale({ locale, currency }: { locale: string; currency: string }) {
   const router = useRouter();
@@ -51,22 +54,26 @@ export function CounterSale({ locale, currency }: { locale: string; currency: st
   }
 
   function add(drug: SellableDrug) {
-    setLines((prev) => [...prev, { drug, batchId: drug.batches[0].id, quantity: "1" }]);
+    setLines((prev) => [...prev, { drug, batchId: drug.batches[0].id, quantity: "1", soldAs: "unit" }]);
     setQuery("");
     setResults([]);
   }
 
   const priced = lines.map((l) => {
     const qty = Number(l.quantity);
-    return { ...l, qty, amount: l.drug.price && Number.isInteger(qty) && qty > 0 ? toMinor(l.drug.price) * qty : 0 };
+    const price = sellingPrice(l.drug, l.soldAs);
+    const ok = Number.isInteger(qty) && qty > 0;
+    const units = ok ? unitsFor(qty, l.soldAs, l.drug.packSize) : 0;
+    const inBatch = l.drug.batches.find((b) => b.id === l.batchId)?.quantity ?? 0;
+    return { ...l, qty, price, units, short: units > inBatch, amount: price && ok ? toMinor(price) * qty : 0 };
   });
   const total = priced.reduce((sum, l) => sum + l.amount, 0);
-  const valid = priced.length > 0 && priced.every((l) => l.drug.price && Number.isInteger(l.qty) && l.qty > 0);
+  const valid = priced.length > 0 && priced.every((l) => l.price && Number.isInteger(l.qty) && l.qty > 0 && !l.short);
 
   async function complete() {
     setPending(true);
     const result = await counterSaleAction({
-      lines: priced.map((l) => ({ drugId: l.drug.drugId, batchId: l.batchId, quantity: l.qty })),
+      lines: priced.map((l) => ({ drugId: l.drug.drugId, batchId: l.batchId, quantity: l.qty, soldAs: l.soldAs })),
       customerName,
       customerPhone,
       method,
@@ -123,40 +130,65 @@ export function CounterSale({ locale, currency }: { locale: string; currency: st
         ) : (
           <ul className="space-y-3">
             {priced.map((line, index) => (
-              <li key={`${line.drug.drugId}-${index}`} className="grid gap-3 rounded-2xl border border-zinc-200 p-4 sm:grid-cols-[1fr_12rem_6rem_7rem_auto] sm:items-center dark:border-zinc-800">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-zinc-900 dark:text-zinc-100">{line.drug.name}</p>
-                  <p className="text-xs text-zinc-500">{line.drug.price ? `${money(toMinor(line.drug.price))} each` : "No selling price set"}</p>
+              <li key={`${line.drug.drugId}-${index}`} className="space-y-3 rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-zinc-900 dark:text-zinc-100">{line.drug.name}</p>
+                    <p className="text-xs text-zinc-500">
+                      {line.price ? `${money(toMinor(line.price))} per ${line.soldAs === "pack" ? packWord(line.drug.form) : unitWord(line.drug.form)}` : "No selling price set"}
+                      {line.soldAs === "pack" && line.units > 0 ? ` · ${line.units} ${unitWord(line.drug.form, line.units)}` : ""}
+                    </p>
+                    {line.short && <p className="text-xs font-medium text-red-600 dark:text-red-400">More than this batch holds</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-right text-sm font-semibold tabular-nums">{money(line.amount)}</p>
+                    <button
+                      type="button"
+                      onClick={() => setLines((prev) => prev.filter((_, i) => i !== index))}
+                      className={buttonClass("ghost", "sm", "px-2")}
+                      aria-label={`Remove ${line.drug.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                 </div>
-                <select
-                  aria-label={`Batch for ${line.drug.name}`}
-                  value={line.batchId}
-                  onChange={(e) => setLines((prev) => prev.map((l, i) => (i === index ? { ...l, batchId: e.target.value } : l)))}
-                  className={cn(inputClass, "h-10")}
-                >
-                  {line.drug.batches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.batchNo} · exp {b.expiryDate} · {b.quantity}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  aria-label={`Quantity of ${line.drug.name}`}
-                  type="number"
-                  min={1}
-                  value={line.quantity}
-                  onChange={(e) => setLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
-                  className={cn(inputClass, "h-10")}
-                />
-                <p className="text-right text-sm font-semibold tabular-nums">{money(line.amount)}</p>
-                <button
-                  type="button"
-                  onClick={() => setLines((prev) => prev.filter((_, i) => i !== index))}
-                  className={buttonClass("ghost", "sm", "px-2")}
-                  aria-label={`Remove ${line.drug.name}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,11rem)_6rem]">
+                  <select
+                    aria-label={`Batch for ${line.drug.name}`}
+                    value={line.batchId}
+                    onChange={(e) => setLines((prev) => prev.map((l, i) => (i === index ? { ...l, batchId: e.target.value } : l)))}
+                    className={cn(inputClass, "h-10")}
+                  >
+                    {line.drug.batches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.batchNo} · exp {b.expiryDate} · {b.quantity} {unitWord(line.drug.form, b.quantity)}
+                      </option>
+                    ))}
+                  </select>
+                  {line.drug.packSize > 1 ? (
+                    <select
+                      aria-label={`Sell ${line.drug.name} as`}
+                      value={line.soldAs}
+                      onChange={(e) => setLines((prev) => prev.map((l, i) => (i === index ? { ...l, soldAs: e.target.value as SoldAs } : l)))}
+                      className={cn(inputClass, "h-10")}
+                    >
+                      <option value="unit">{capitalize(unitWord(line.drug.form, 2))}</option>
+                      <option value="pack">
+                        {capitalize(packWord(line.drug.form, 2))} of {line.drug.packSize}
+                      </option>
+                    </select>
+                  ) : (
+                    <span className="flex h-10 items-center text-sm text-zinc-500">{capitalize(unitWord(line.drug.form, 2))}</span>
+                  )}
+                  <input
+                    aria-label={`Quantity of ${line.drug.name}`}
+                    type="number"
+                    min={1}
+                    value={line.quantity}
+                    onChange={(e) => setLines((prev) => prev.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
+                    className={cn(inputClass, "h-10")}
+                  />
+                </div>
               </li>
             ))}
           </ul>

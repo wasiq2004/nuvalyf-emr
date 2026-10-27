@@ -99,7 +99,14 @@ export const pharmacySaleItems = appSchema.table(
     description: varchar("description", { length: 300 }).notNull(),
     batchNo: varchar("batch_no", { length: 60 }).notNull(),
     expiryDate: date("expiry_date").notNull(),
+    /** Units that left stock (always single units). */
     quantity: integer("quantity").notNull(),
+    /** Sold loose ("unit") or by the pack ("pack": a strip). */
+    soldAs: varchar("sold_as", { length: 10 }).notNull().default("unit"),
+    packSize: integer("pack_size").notNull().default(1),
+    /** Packs sold, for pack lines. */
+    packs: integer("packs"),
+    /** Price of what was sold: per unit, or per pack for pack lines. */
     unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   },
@@ -109,7 +116,11 @@ export const pharmacySaleItems = appSchema.table(
     index("sale_items_sale_idx").on(t.saleId),
     index("sale_items_rx_item_idx").on(t.prescriptionItemId),
     check("sale_items_quantity_check", sql`${t.quantity} > 0`),
-    check("sale_items_amount_check", sql`${t.amount} = ${t.unitPrice} * ${t.quantity}`),
+    check(
+      "sale_items_amount_check",
+      sql`(${t.soldAs} = 'unit' AND ${t.packs} IS NULL AND ${t.amount} = ${t.unitPrice} * ${t.quantity})
+        OR (${t.soldAs} = 'pack' AND ${t.packs} > 0 AND ${t.quantity} = ${t.packs} * ${t.packSize} AND ${t.amount} = ${t.unitPrice} * ${t.packs})`,
+    ),
   ],
 );
 
@@ -195,6 +206,78 @@ export const purchaseOrderItems = appSchema.table(
     foreignKey({ name: "po_items_drug_fk", columns: [t.clinicId, t.drugId], foreignColumns: [drugs.clinicId, drugs.id] }),
     uniqueIndex("po_items_drug_idx").on(t.purchaseOrderId, t.drugId),
     check("po_items_quantity_check", sql`${t.quantity} > 0 AND ${t.receivedQuantity} >= 0`),
+  ],
+);
+
+/**
+ * A supplier's bill, entered line by line. Saving it adds every line to stock
+ * through the ledger, so the bill and its lines are a permanent record
+ * (append-only, db/sql/security.sql); mistakes are corrected with a stock
+ * adjustment. One bill number per supplier.
+ */
+export const purchaseBills = appSchema.table(
+  "purchase_bills",
+  {
+    id: id(),
+    clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    /** Our reference, PB-000001. */
+    number: varchar("number", { length: 30 }).notNull(),
+    supplierId: uuid("supplier_id").notNull(),
+    /** The supplier's invoice number, as printed (stored upper case). */
+    billNo: varchar("bill_no", { length: 60 }).notNull(),
+    billDate: date("bill_date").notNull(),
+    subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
+    taxTotal: numeric("tax_total", { precision: 12, scale: 2 }).notNull(),
+    total: numeric("total", { precision: 12, scale: 2 }).notNull(),
+    notes: varchar("notes", { length: 500 }),
+    enteredBy: uuid("entered_by").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("purchase_bills_clinic_id_id_key").on(t.clinicId, t.id),
+    uniqueIndex("purchase_bills_number_idx").on(t.clinicId, t.number),
+    uniqueIndex("purchase_bills_supplier_bill_idx").on(t.clinicId, t.supplierId, t.billNo),
+    foreignKey({ name: "purchase_bills_supplier_fk", columns: [t.clinicId, t.supplierId], foreignColumns: [suppliers.clinicId, suppliers.id] }),
+    index("purchase_bills_date_idx").on(t.clinicId, t.billDate),
+    check("purchase_bills_total_check", sql`${t.total} = ${t.subtotal} + ${t.taxTotal} AND ${t.subtotal} >= 0 AND ${t.taxTotal} >= 0`),
+  ],
+);
+
+export const purchaseBillItems = appSchema.table(
+  "purchase_bill_items",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    billId: uuid("bill_id").notNull(),
+    drugId: uuid("drug_id").notNull(),
+    batchId: uuid("batch_id").notNull(),
+    /** The item's name as printed on the bill. */
+    description: varchar("description", { length: 200 }).notNull(),
+    batchNo: varchar("batch_no", { length: 60 }).notNull(),
+    expiryDate: date("expiry_date").notNull(),
+    /** Packs paid for, packs free, units per pack. */
+    quantity: integer("quantity").notNull(),
+    freeQuantity: integer("free_quantity").notNull().default(0),
+    packSize: integer("pack_size").notNull(),
+    /** Per pack, before tax. */
+    rate: numeric("rate", { precision: 12, scale: 2 }).notNull(),
+    mrp: numeric("mrp", { precision: 12, scale: 2 }),
+    gstRate: numeric("gst_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+    amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    taxAmount: numeric("tax_amount", { precision: 12, scale: 2 }).notNull(),
+    /** Units that went into stock: (quantity + free) x pack size. */
+    units: integer("units").notNull(),
+  },
+  (t) => [
+    foreignKey({ name: "bill_items_bill_fk", columns: [t.clinicId, t.billId], foreignColumns: [purchaseBills.clinicId, purchaseBills.id] }),
+    foreignKey({ name: "bill_items_drug_fk", columns: [t.clinicId, t.drugId], foreignColumns: [drugs.clinicId, drugs.id] }),
+    foreignKey({ name: "bill_items_batch_fk", columns: [t.clinicId, t.batchId], foreignColumns: [stockBatches.clinicId, stockBatches.id] }),
+    index("bill_items_bill_idx").on(t.billId),
+    index("bill_items_drug_idx").on(t.clinicId, t.drugId),
+    check("bill_items_quantity_check", sql`${t.quantity} > 0 AND ${t.freeQuantity} >= 0 AND ${t.packSize} > 0`),
+    check("bill_items_units_check", sql`${t.units} = (${t.quantity} + ${t.freeQuantity}) * ${t.packSize}`),
+    check("bill_items_amount_check", sql`${t.amount} = ${t.rate} * ${t.quantity} AND ${t.taxAmount} >= 0`),
+    check("bill_items_gst_check", sql`${t.gstRate} >= 0 AND ${t.gstRate} <= 100`),
   ],
 );
 

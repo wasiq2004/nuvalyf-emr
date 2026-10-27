@@ -17,6 +17,8 @@ import {
 import { AppError } from "@/lib/errors";
 import { importStarterCatalog } from "@/lib/catalog/seed";
 import { DRUG_FORMS, PRESET_KINDS, SEVERITIES, VITAL_KEYS } from "./catalog-options";
+import { ITEM_TYPES } from "./item-rules";
+import { addAlias, removeAlias, searchItems } from "./items.service";
 import {
   ENTRY_KINDS,
   createDrug,
@@ -35,31 +37,83 @@ import {
 // Medicines (Pharmacist + Clinic Admin)
 // ---------------------------------------------------------------------------
 
+const itemFields = {
+  name: requiredText(200, "Name"),
+  itemType: z.enum(ITEM_TYPES, { message: "Choose a type" }).default("medicine"),
+  genericName: optionalText(200),
+  form: z.enum(DRUG_FORMS, { message: "Choose a form" }).default("other"),
+  strength: optionalText(60),
+  manufacturer: optionalText(120),
+  packSize: z.coerce.number({ message: "Units per pack must be a number" }).int("Whole units only").min(1, "At least 1").max(10000).default(1),
+};
+
+/** Medicines need a generic name: it drives interaction and allergy checks. */
+const needsGeneric = <T extends { itemType: string; genericName?: string }>(v: T) => v.itemType !== "medicine" || Boolean(v.genericName);
+const genericIssue = { message: "Enter the generic name", path: ["genericName"] };
+
 export const saveDrugAction = clinicAction(
   {
     name: "catalog.saveDrug",
     permission: "medicine:manage",
     schema: z.object({
       id: optionalId,
-      name: requiredText(200, "Name"),
-      genericName: requiredText(200, "Generic name"),
-      form: z.enum(DRUG_FORMS, { message: "Choose a form" }),
-      strength: optionalText(60),
+      ...itemFields,
       category: optionalText(80),
       defaultDose: optionalText(60),
       defaultFrequency: optionalText(40),
       defaultDurationDays: optionalInt(1, 365, "Duration"),
       defaultInstructions: optionalText(200),
       price: optionalMoney,
+      packPrice: optionalMoney,
       allergyClassIds: stringList.pipe(z.array(idField)),
-    }),
+    }).refine(needsGeneric, genericIssue),
   },
   async ({ session, db, audit }, input) =>
     db(async (tx) => {
       const { id, ...values } = input;
       const row = id ? await updateDrug(tx, session.clinicId, id, values) : await createDrug(tx, session.clinicId, values);
-      await audit(tx, { action: id ? "MEDICINE_UPDATED" : "MEDICINE_ADDED", targetType: "drug", targetId: row.id, details: { name: values.name } });
+      await audit(tx, { action: id ? "MEDICINE_UPDATED" : "MEDICINE_ADDED", targetType: "drug", targetId: row.id, details: { name: values.name, type: values.itemType } });
       return row;
+    }),
+);
+
+/** Add an item without leaving the supplier bill; returns it ready to pick. */
+export const quickAddItemAction = clinicAction(
+  {
+    name: "catalog.quickAddItem",
+    permission: "medicine:manage",
+    schema: z.object({ ...itemFields, price: optionalMoney, packPrice: optionalMoney }).refine(needsGeneric, genericIssue),
+  },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const row = await createDrug(tx, session.clinicId, { ...input, defaultDurationDays: null, allergyClassIds: [] });
+      await audit(tx, { action: "MEDICINE_ADDED", targetType: "drug", targetId: row.id, details: { name: input.name, type: input.itemType, from: "supplier bill" } });
+      const [item] = (await searchItems(tx, input.name, { limit: 50 })).filter((i) => i.id === row.id);
+      if (!item) throw new AppError("The item was added but could not be loaded. Search for it.");
+      return item;
+    }),
+);
+
+export const addItemAliasAction = clinicAction(
+  {
+    name: "catalog.addAlias",
+    permission: "medicine:manage",
+    schema: z.object({ drugId: idField, alias: requiredText(200, "The other name"), manufacturer: optionalText(120) }),
+  },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const row = await addAlias(tx, session.clinicId, input, session.userId);
+      if (!row) throw new AppError("That is already a name of this item.");
+      await audit(tx, { action: "ITEM_NAME_ADDED", targetType: "drug", targetId: input.drugId, details: { item: row.itemName, alias: row.alias } });
+    }),
+);
+
+export const removeItemAliasAction = clinicAction(
+  { name: "catalog.removeAlias", permission: "medicine:manage", schema: z.object({ id: idField }) },
+  async ({ db, audit }, input) =>
+    db(async (tx) => {
+      const row = await removeAlias(tx, input.id);
+      await audit(tx, { action: "ITEM_NAME_REMOVED", targetType: "drug", targetId: row.drugId, details: { alias: row.alias } });
     }),
 );
 

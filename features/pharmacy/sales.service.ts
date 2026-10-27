@@ -27,8 +27,10 @@ import { staffName } from "@/features/clinical/encounters.service";
 import type { PaymentMethod } from "@/features/billing/billing-rules";
 import { moveStock } from "./stock.service";
 import { isExpired, suggestQuantity } from "./stock-rules";
+import { packWord, sellingPrice, unitsFor, type SoldAs } from "./selling-rules";
 
-export type SaleLine = { drugId: string; batchId: string; quantity: number; prescriptionItemId?: string | null };
+/** `quantity` counts units, or packs when `soldAs` is "pack" (default "unit"). */
+export type SaleLine = { drugId: string; batchId: string; quantity: number; soldAs?: SoldAs; prescriptionItemId?: string | null };
 
 export type SaleInput = {
   lines: SaleLine[];
@@ -53,6 +55,16 @@ export async function sell(tx: Tx, clinicId: string, input: SaleInput, actorId: 
 async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempotencyKey">, actorId: string, today: string): Promise<SaleResult> {
   if (input.lines.length === 0) throw new AppError("Add at least one medicine.");
 
+  const drugRows = await tx.select().from(drugs).where(inArray(drugs.id, [...new Set(input.lines.map((l) => l.drugId))]));
+  // Units leaving stock per line: packs are converted at the item's pack size.
+  const sized = input.lines.map((line) => {
+    const drug = drugRows.find((d) => d.id === line.drugId);
+    if (!drug) throw new AppError("A selected item was not found.");
+    const soldAs: SoldAs = line.soldAs ?? "unit";
+    if (soldAs === "pack" && drug.packSize < 2) throw new AppError(`${drug.name} is not sold in packs.`);
+    return { line, drug, soldAs, units: unitsFor(line.quantity, soldAs, drug.packSize) };
+  });
+
   let patientId = input.patientId ?? null;
   let rxItems: (typeof prescriptionItems.$inferSelect)[] = [];
   if (input.prescriptionId) {
@@ -66,7 +78,7 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     for (const item of rxItems) {
       const needed = suggestQuantity(item);
       if (needed === null) continue;
-      const now = input.lines.filter((l) => l.prescriptionItemId === item.id).reduce((n, l) => n + l.quantity, 0);
+      const now = sized.filter((s) => s.line.prescriptionItemId === item.id).reduce((n, s) => n + s.units, 0);
       const remaining = Math.max(0, needed - (given.get(item.id) ?? 0));
       if (now > remaining) throw new AppError(`${item.drugName}: only ${remaining} left to dispense on this prescription.`);
     }
@@ -86,21 +98,20 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
   // Lock every batch involved in a fixed order so two sales cannot deadlock.
   const batchIds = [...new Set(input.lines.map((l) => l.batchId))].sort();
   const batches = await tx.select().from(stockBatches).where(inArray(stockBatches.id, batchIds)).orderBy(asc(stockBatches.id)).for("update");
-  const drugRows = await tx.select().from(drugs).where(inArray(drugs.id, [...new Set(input.lines.map((l) => l.drugId))]));
 
-  const priced = input.lines.map((line) => {
+  const priced = sized.map(({ line, drug, soldAs, units }) => {
     const batch = batches.find((b) => b.id === line.batchId);
-    const drug = drugRows.find((d) => d.id === line.drugId);
-    if (!batch || !drug || batch.drugId !== drug.id) throw new AppError("A selected batch does not match its medicine.");
+    if (!batch || batch.drugId !== drug.id) throw new AppError("A selected batch does not match its medicine.");
     if (isExpired(batch.expiryDate, today)) throw new AppError(`Batch ${batch.batchNo} of ${drug.name} has expired and cannot be sold.`);
-    if (!drug.price) throw new AppError(`${drug.name} has no selling price. Set one in Medicines first.`);
-    const unit = toMinor(drug.price);
-    return { line, batch, drug, unit, amount: unit * line.quantity };
+    const price = sellingPrice(drug, soldAs);
+    if (!price) throw new AppError(`${drug.name} has no selling price${soldAs === "pack" ? ` per ${packWord(drug.form)}` : ""}. Set one in Medicines & supplies first.`);
+    const each = toMinor(price);
+    return { line, batch, drug, soldAs, units, each, amount: each * line.quantity };
   });
 
   // The same batch may appear on two lines: check the combined quantity.
   for (const batch of batches) {
-    const wanted = priced.filter((p) => p.batch.id === batch.id).reduce((n, p) => n + p.line.quantity, 0);
+    const wanted = priced.filter((p) => p.batch.id === batch.id).reduce((n, p) => n + p.units, 0);
     if (wanted > batch.quantity) {
       const drug = drugRows.find((d) => d.id === batch.drugId);
       throw new AppError(`Only ${batch.quantity} of ${drug?.name ?? "that medicine"} left in batch ${batch.batchNo}.`);
@@ -135,8 +146,11 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
       description: [p.drug.name, p.drug.strength].filter(Boolean).join(" "),
       batchNo: p.batch.batchNo,
       expiryDate: p.batch.expiryDate,
-      quantity: p.line.quantity,
-      unitPrice: fromMinor(p.unit),
+      quantity: p.units,
+      soldAs: p.soldAs,
+      packSize: p.soldAs === "pack" ? p.drug.packSize : 1,
+      packs: p.soldAs === "pack" ? p.line.quantity : null,
+      unitPrice: fromMinor(p.each),
       amount: fromMinor(p.amount),
     })),
   );
@@ -144,7 +158,7 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     await moveStock(
       tx,
       clinicId,
-      { drugId: p.drug.id, batchId: p.batch.id, change: -p.line.quantity, reason: input.prescriptionId ? "dispense" : "sale", sourceType: "pharmacy_sale", sourceId: sale.id },
+      { drugId: p.drug.id, batchId: p.batch.id, change: -p.units, reason: input.prescriptionId ? "dispense" : "sale", sourceType: "pharmacy_sale", sourceId: sale.id },
       actorId,
     );
   }
@@ -304,7 +318,10 @@ export async function getPrescriptionForDispensing(tx: Tx, prescriptionId: strin
           .map((o) => ({
             drugId: o.drug.id,
             drugName: o.drug.name,
+            form: o.drug.form,
             price: o.drug.price,
+            packPrice: o.drug.packPrice,
+            packSize: o.drug.packSize,
             batchId: o.batch.id,
             batchNo: o.batch.batchNo,
             expiryDate: o.batch.expiryDate,
@@ -346,7 +363,13 @@ export async function getSale(tx: Tx, saleId: string) {
     .where(eq(pharmacySales.id, saleId))
     .limit(1);
   if (!row) return null;
-  const items = await tx.select().from(pharmacySaleItems).where(eq(pharmacySaleItems.saleId, saleId));
+  const items = (
+    await tx
+      .select({ item: pharmacySaleItems, form: drugs.form })
+      .from(pharmacySaleItems)
+      .innerJoin(drugs, eq(drugs.id, pharmacySaleItems.drugId))
+      .where(eq(pharmacySaleItems.saleId, saleId))
+  ).map((r) => ({ ...r.item, form: r.form }));
   return {
     ...row.sale,
     soldByName: staffName(row),
@@ -366,14 +389,27 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
     .where(
       and(
         eq(drugs.isActive, true),
-        sql`(${drugs.name} ilike ${`%${term}%`} or ${drugs.genericName} ilike ${`%${term}%`})`,
+        sql`(${drugs.name} ilike ${`%${term}%`} or ${drugs.genericName} ilike ${`%${term}%`} or exists (select 1 from app.drug_aliases a where a.drug_id = ${drugs.id} and a.alias ilike ${`%${term}%`}))`,
         sql`${stockBatches.quantity} > 0`,
         sql`${stockBatches.expiryDate} >= ${today}`,
       ),
     )
     .orderBy(asc(drugs.name), asc(stockBatches.expiryDate))
     .limit(60);
-  const byDrug = new Map<string, { drugId: string; name: string; genericName: string; form: string; strength: string | null; price: string | null; batches: { id: string; batchNo: string; expiryDate: string; quantity: number }[] }>();
+  const byDrug = new Map<
+    string,
+    {
+      drugId: string;
+      name: string;
+      genericName: string;
+      form: string;
+      strength: string | null;
+      price: string | null;
+      packPrice: string | null;
+      packSize: number;
+      batches: { id: string; batchNo: string; expiryDate: string; quantity: number }[];
+    }
+  >();
   for (const r of rows) {
     const entry = byDrug.get(r.drug.id) ?? {
       drugId: r.drug.id,
@@ -382,6 +418,8 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
       form: r.drug.form,
       strength: r.drug.strength,
       price: r.drug.price,
+      packPrice: r.drug.packPrice,
+      packSize: r.drug.packSize,
       batches: [],
     };
     entry.batches.push({ id: r.batch.id, batchNo: r.batch.batchNo, expiryDate: r.batch.expiryDate, quantity: r.batch.quantity });
