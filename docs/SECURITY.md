@@ -68,7 +68,7 @@ Separation-of-duty rules:
 | Role | Used by | Can |
 | --- | --- | --- |
 | owner | `db:migrate` only | Everything; never used by the running app |
-| `medflow_app` | Clinic and compliance panels, worker | `app.*` under RLS; INSERT-only on audit; no `platform.*` |
+| `medflow_app` | Clinic and compliance panels, worker | `app.*` under RLS; INSERT-only on audit; read-only on the shared `ref.*` reference lists; no `platform.*` |
 | `medflow_platform` | Operations console | `platform.*` and owner-defined usage views; no clinical tables |
 | `medflow_provisioner` | Clinic onboarding and admin rescue, by Super Admins only | Create a clinic, its settings, roles and first admin; reset a clinic admin |
 

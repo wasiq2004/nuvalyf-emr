@@ -118,6 +118,7 @@ export async function resetDatabase(sql: Sql) {
     DROP SCHEMA IF EXISTS app CASCADE;
     DROP SCHEMA IF EXISTS platform CASCADE;
     DROP SCHEMA IF EXISTS sys CASCADE;
+    DROP SCHEMA IF EXISTS ref CASCADE;
     DROP SCHEMA IF EXISTS drizzle CASCADE;
   `);
   console.log("✓ Database reset");

@@ -3,6 +3,7 @@
 //   2. platform admin from PLATFORM_ADMIN_EMAIL / PLATFORM_ADMIN_PASSWORD, if set
 // Never deletes data.
 import { ensureDatabase, ensurePlatformAdmin, ensureRoles, ownerConnection, runMigrations } from "./tasks";
+import { loadReferenceMedicines } from "./reference";
 
 async function main() {
   await ensureDatabase();
@@ -10,6 +11,7 @@ async function main() {
   try {
     await ensureRoles(sql);
     await runMigrations(sql);
+    await loadReferenceMedicines(sql);
 
     const { PLATFORM_ADMIN_EMAIL, PLATFORM_ADMIN_PASSWORD } = process.env;
     if (PLATFORM_ADMIN_EMAIL && PLATFORM_ADMIN_PASSWORD) {

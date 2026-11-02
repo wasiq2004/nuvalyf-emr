@@ -36,7 +36,8 @@ When a delivery arrives with the supplier's bill, type the bill in. Saving it ad
 2. Under **Bill**, choose the **Supplier** (or **Add supplier**), and enter the **Bill number** and **Bill date** as printed.
 3. For each line on the bill, type the item **as it is printed on the bill** in the item box. NuvaLyf searches every name the item is known by, with the words in any order, so "Needle clinic" finds "Clinic needle 24G".
    - Pick the right item from the list. If the bill spells it differently, NuvaLyf offers **Remember “…” as another name for …**. Leave it ticked and next time that spelling finds the item straight away (shown as **Known as “…”**).
-   - If the item is new to the clinic, choose **Add “…” as a new item**. Pick its **Type**: **Medicine** (can be prescribed), **Consumable** (needles, syringes, gauze) or **Instrument**. Give its **Units per pack**, then **Add item**.
+   - If it is not in your list yet, matches from the **Indian medicine list** (about 2.5 lakh brands) appear below your own items. Pick one and it is added to your list with its generic name, strength, form and pack size, then used on the line.
+   - If it is in neither, choose **Add “…” as a new item**. Pick its **Type**: **Medicine** (can be prescribed), **Consumable** (needles, syringes, gauze) or **Instrument**. Give its **Units per pack**, then **Add item**.
 4. Fill in the line as printed: **Batch**, **Expiry** (MM/YY is fine), **Qty (packs)**, **Free** packs, **Units / pack**, **Rate / pack**, **MRP / pack** and **GST %**. Under each line you see how many units go into stock and the cost per unit.
 5. Use **Add line** for every line on the bill. Check that the **Bill total** matches the paper bill.
 6. Leave **Set selling prices from the MRP** ticked to price each item from its MRP: the strip price becomes the MRP, and the tablet price the MRP ÷ tablets per strip.

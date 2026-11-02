@@ -6,7 +6,7 @@
 // Nothing is matched silently: the person picks the item, and a new spelling
 // is offered to remember for next time.
 import { useEffect, useRef, useState } from "react";
-import { Loader2, PackagePlus, Pill, Search, Stethoscope, Syringe, X } from "lucide-react";
+import { BookPlus, Loader2, PackagePlus, Pill, Search, Stethoscope, Syringe, X } from "lucide-react";
 import { toast } from "sonner";
 import { ActionForm, Field, SelectInput, SubmitButton, TextInput, inputClass } from "@/components/app/form";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -17,6 +17,7 @@ import { DRUG_FORMS, capitalize } from "@/features/catalog/catalog-options";
 import { ITEM_TYPE_LABELS, ITEM_TYPES, type ItemType } from "@/features/catalog/item-rules";
 import type { ItemOption } from "@/features/catalog/items.service";
 import { cn } from "@/lib/utils";
+import { ReferenceHitText, addReference, useReferenceSearch } from "./reference-search";
 
 export const ITEM_ICONS: Record<ItemType, typeof Pill> = { medicine: Pill, consumable: Syringe, instrument: Stethoscope };
 
@@ -48,11 +49,15 @@ export function ItemPicker({
   const [adding, setAdding] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latest = useRef(0);
+  // The shared Indian medicine list, for items not yet in the clinic's list.
+  const reference = useReferenceSearch();
+  const [linking, setLinking] = useState<number | null>(null);
 
   useEffect(() => () => clearTimeout(timer.current), []);
 
   function search(value: string) {
     onTyped(value);
+    if (canAddItems) reference.search(value);
     clearTimeout(timer.current);
     if (value.trim().length < 2) {
       setResults(null);
@@ -107,6 +112,9 @@ export function ItemPicker({
     );
   }
 
+  // List entries the clinic has not added yet (added ones show above as its own items).
+  const fromList = (reference.results ?? []).filter((hit) => !hit.clinicDrugId).slice(0, 6);
+
   return (
     <div className="relative min-w-0">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" aria-hidden />
@@ -145,7 +153,34 @@ export function ItemPicker({
               })}
             </ul>
           ) : (
-            <p className="px-4 py-3 text-sm text-zinc-500">No item matches “{typed.trim()}”.</p>
+            <p className="px-4 py-3 text-sm text-zinc-500">No item in your list matches “{typed.trim()}”.</p>
+          )}
+          {canAddItems && fromList.length > 0 && (
+            <div className="border-t border-zinc-100 dark:border-zinc-800">
+              <p className="px-4 pt-2.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">From the Indian medicine list</p>
+              <ul className="max-h-60 divide-y divide-zinc-100 overflow-y-auto dark:divide-zinc-800" role="listbox" aria-label={`Medicine list matches for ${label.toLowerCase()}`}>
+                {fromList.map((hit) => (
+                  <li key={hit.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={false}
+                      disabled={linking !== null}
+                      onClick={async () => {
+                        setLinking(hit.id);
+                        const item = await addReference(hit);
+                        setLinking(null);
+                        if (item) pick(item);
+                      }}
+                      className="flex w-full items-start gap-3 px-4 py-2.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                    >
+                      {linking === hit.id ? <Loader2 className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin text-zinc-400" /> : <BookPlus className="mt-0.5 h-4 w-4 flex-shrink-0 text-(--accent-text)" aria-hidden />}
+                      <ReferenceHitText hit={hit} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           {canAddItems && (
             <button

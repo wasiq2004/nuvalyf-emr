@@ -18,7 +18,8 @@ import { AppError } from "@/lib/errors";
 import { importStarterCatalog } from "@/lib/catalog/seed";
 import { DRUG_FORMS, PRESET_KINDS, SEVERITIES, VITAL_KEYS } from "./catalog-options";
 import { ITEM_TYPES } from "./item-rules";
-import { addAlias, removeAlias, searchItems } from "./items.service";
+import { addAlias, getItemOption, removeAlias } from "./items.service";
+import { addFromReference, searchReference } from "./reference.service";
 import {
   ENTRY_KINDS,
   createDrug,
@@ -88,9 +89,7 @@ export const quickAddItemAction = clinicAction(
     db(async (tx) => {
       const row = await createDrug(tx, session.clinicId, { ...input, defaultDurationDays: null, allergyClassIds: [] });
       await audit(tx, { action: "MEDICINE_ADDED", targetType: "drug", targetId: row.id, details: { name: input.name, type: input.itemType, from: "supplier bill" } });
-      const [item] = (await searchItems(tx, input.name, { limit: 50 })).filter((i) => i.id === row.id);
-      if (!item) throw new AppError("The item was added but could not be loaded. Search for it.");
-      return item;
+      return getItemOption(tx, row.id);
     }),
 );
 
@@ -302,5 +301,27 @@ export const importStarterAction = clinicAction(
       const added = await importStarterCatalog(tx, session.clinicId);
       await audit(tx, { action: "STARTER_CATALOG_IMPORTED", targetType: "catalog", details: added });
       return added;
+    }),
+);
+
+// ---------------------------------------------------------------------------
+// The shared Indian medicine list
+// ---------------------------------------------------------------------------
+
+export const searchReferenceAction = clinicAction(
+  { name: "catalog.searchReference", permission: "medicine:manage", schema: z.object({ query: z.string().max(120).default("") }) },
+  async ({ db }, input) => db((tx) => searchReference(tx, input.query)),
+);
+
+/** Copies a list entry into the clinic's own list (once) and returns it. */
+export const addFromReferenceAction = clinicAction(
+  { name: "catalog.addFromReference", permission: "medicine:manage", schema: z.object({ referenceId: z.coerce.number().int().positive() }) },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const { item, created } = await addFromReference(tx, session.clinicId, input.referenceId);
+      if (created) {
+        await audit(tx, { action: "MEDICINE_ADDED", targetType: "drug", targetId: item.id, details: { name: item.name, from: "Indian medicine list" } });
+      }
+      return item;
     }),
 );

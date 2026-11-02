@@ -15,6 +15,7 @@ export const DRUG_FORMS = [
   "gel",
   "other",
 ] as const;
+export type DrugForm = (typeof DRUG_FORMS)[number];
 
 export const SEVERITIES = ["minor", "moderate", "major", "contraindicated"] as const;
 

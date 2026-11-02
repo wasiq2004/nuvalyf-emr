@@ -71,6 +71,8 @@ Each tab holds one list your clinic controls:
 | Vital ranges | What counts as low, high or critical for each vital sign |
 | Lab tests | Tests doctors can order, with sample, unit, reference range and price |
 
+**Add from Indian medicine list** searches about 2.5 lakh Indian brands by name. **Add** copies one into your list with its generic name, composition strength, form, manufacturer and pack size, ready to prescribe and stock. Prices are not copied: the list's MRPs date from when it was compiled and are shown only as a hint, so set prices yourself or let the first supplier bill set them from its MRP. Each entry is added once; an item you already have by the same name is linked rather than duplicated.
+
 When new entries are added to the built-in starter list, a banner offers **Import N new entries**. It only adds; it never changes or removes your own entries. **Deactivate** hides an entry from new prescriptions and orders without affecting past records.
 
 ## WhatsApp messaging

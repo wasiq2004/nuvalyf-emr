@@ -25,6 +25,8 @@ import { PRESET_KIND_LABELS } from "@/features/catalog/catalog-options";
 import { VITAL_FIELDS } from "@/features/clinical/vital-rules";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
+import { ReferenceMedicineDialog } from "@/components/pharmacy/reference-search";
+import { referenceSize } from "@/features/catalog/reference.service";
 import { packWord } from "@/features/pharmacy/selling-rules";
 import {
   AllergyClassDialog,
@@ -101,7 +103,14 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
     const classes = tab === "medicines" || tab === "allergies" ? await listAllergyClasses(tx) : [];
     switch (tab) {
       case "medicines":
-        return { kind: "medicines" as const, missing, classes, drugs: await listDrugs(tx, q), currency: (await getClinicSettings(tx, ctx.clinicId)).currency };
+        return {
+          kind: "medicines" as const,
+          missing,
+          classes,
+          drugs: await listDrugs(tx, q),
+          currency: (await getClinicSettings(tx, ctx.clinicId)).currency,
+          referenceSize: await referenceSize(tx),
+        };
       case "interactions":
         return { kind: "interactions" as const, missing, classes, interactions: await listInteractions(tx), generics: await listGenericNames(tx) };
       case "allergies":
@@ -166,7 +175,12 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
           flush
           title="Medicines & supplies"
           description="Everything the clinic stocks. Medicines can be prescribed (defaults pre-fill the prescription; allergy classes drive the allergy check); consumables and instruments are stocked and sold."
-          actions={<DrugDialog classes={activeClasses} />}
+          actions={
+            <>
+              <ReferenceMedicineDialog size={data.referenceSize} />
+              <DrugDialog classes={activeClasses} />
+            </>
+          }
         >
           <div className="px-6 pb-4 pt-2 lg:px-8">
             <SearchBox tab="medicines" q={q} placeholder="Search name, other name, generic, maker or category" />

@@ -483,6 +483,26 @@ test("Pharmacist types in supplier bills: a new consumable, another supplier's s
   await expect(page.getByRole("cell", { name: "1 strip (15 tablets)" })).toBeVisible();
 });
 
+test("The Indian medicine list: find a brand, add it, and use it straight from a supplier bill", async () => {
+  const page = pharmPage;
+  await page.goto("/settings/catalog?tab=medicines");
+  await page.getByRole("button", { name: "Add from Indian medicine list" }).click();
+  await page.getByRole("searchbox", { name: "Search the Indian medicine list" }).fill("Azithral 500");
+  const list = page.getByRole("list", { name: "Medicines in the list" });
+  await list.getByRole("button", { name: "Add Azithral 500 Tablet" }).first().click();
+  await expect(list.locator("li").filter({ hasText: "In your list" }).first()).toContainText("Azithral 500 Tablet");
+  await page.keyboard.press("Escape");
+  await page.goto("/settings/catalog?tab=medicines&q=Azithral");
+  await expect(page.getByRole("cell", { name: /Azithral 500 Tablet/ }).first()).toBeVisible();
+
+  // Not yet in the clinic's list: picked from the medicine list on the bill itself.
+  await page.goto("/pharmacy/purchases/bills/new");
+  await page.getByLabel("Item, line 1").fill("Augmentin 625 Duo");
+  await page.getByRole("listbox", { name: "Medicine list matches for item, line 1" }).getByRole("option").first().click();
+  await expect(page.getByLabel("Units per pack, line 1")).toHaveValue("10");
+  await expect(page.getByText("Augmentin 625 Duo Tablet").first()).toBeVisible();
+});
+
 test("Auditor sees who opened a record, and cannot reach any patient screen", async () => {
   const page = auditorPage;
   await clinicFirstSignIn(page, clinicCode, accounts.auditor.email, accounts.auditor.otp, accounts.auditor.password, "**/audit");

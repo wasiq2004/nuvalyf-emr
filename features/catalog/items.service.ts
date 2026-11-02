@@ -81,6 +81,26 @@ export async function searchItems(tx: Tx, query: string, options: { types?: Item
   });
 }
 
+/** One clinic item in the shape pickers use. */
+export async function getItemOption(tx: Tx, id: string): Promise<ItemOption> {
+  const [r] = await tx.select().from(drugs).where(eq(drugs.id, id)).limit(1);
+  if (!r) throw new AppError("Item not found.");
+  const aliases = (await aliasesFor(tx, [id])).get(id) ?? [];
+  return {
+    id: r.id,
+    name: r.name,
+    itemType: r.itemType as ItemType,
+    genericName: r.genericName,
+    form: r.form,
+    strength: r.strength,
+    manufacturer: r.manufacturer,
+    packSize: r.packSize,
+    price: r.price,
+    aliases: aliases.map((a) => a.alias),
+    matchedAlias: null,
+  };
+}
+
 export type NameIndex = Map<string, { drugId: string; name: string; via: "name" | "alias" }>;
 
 /** Normalised item names and alternate names -> item, for exact matching. */

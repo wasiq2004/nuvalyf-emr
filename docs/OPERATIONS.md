@@ -56,6 +56,12 @@ Set `WEB_PORT` if 3000 is taken.
 
 Backups: run `scripts/ops/backup.sh` with `COMPOSE_PROJECT_NAME` set to the project name Dokploy shows (for example `nuvalyf-nuvalyf-9mq1ma`), or use Dokploy's scheduled commands.
 
+### The Indian medicine list
+
+`db/reference/indian-medicines.csv.gz` (about 2.5 lakh medicines, 6 MB) ships with the code. `db:migrate` and the Docker `setup` service load it into the shared, read-only `ref.medicines` table the first time, and again only when the file changes (about 20 seconds); otherwise they report it as up to date. Set `SKIP_REFERENCE_DATA=true` to skip it, for example on a throwaway database.
+
+Source: the public "A-Z Medicine Dataset of India", compiled from online pharmacy listings. The client chose this source knowing it is not formally licensed for commercial reuse; replace the file with a licensed list if that changes. Listed MRPs are dated and are never used as selling prices.
+
 ### Upgrading
 
 ```bash

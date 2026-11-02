@@ -1,6 +1,7 @@
 // Creates/updates DB roles, applies schema migrations and security policies.
 // Safe to run on every deploy.
 import { ensureDatabase, ensureRoles, ownerConnection, runMigrations } from "./tasks";
+import { loadReferenceMedicines } from "./reference";
 
 async function main() {
   await ensureDatabase();
@@ -8,6 +9,7 @@ async function main() {
   try {
     await ensureRoles(sql);
     await runMigrations(sql);
+    await loadReferenceMedicines(sql);
   } finally {
     await sql.end();
   }

@@ -13,6 +13,8 @@ export const drugs = appSchema.table(
     id: id(),
     clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
     starterKey: varchar("starter_key", { length: 80 }),
+    /** The shared Indian medicine list entry it was added from (ref.medicines.id). */
+    referenceId: integer("reference_id"),
     /** medicine (prescribable), consumable (needles, gauze) or instrument. */
     itemType: varchar("item_type", { length: 20 }).notNull().default("medicine"),
     name: varchar("name", { length: 200 }).notNull(),
@@ -40,6 +42,7 @@ export const drugs = appSchema.table(
   (t) => [
     unique("drugs_clinic_id_id_key").on(t.clinicId, t.id),
     uniqueIndex("drugs_clinic_starter_idx").on(t.clinicId, t.starterKey),
+    uniqueIndex("drugs_clinic_reference_idx").on(t.clinicId, t.referenceId),
     check("drugs_form_check", sql`${t.form} IN ('tablet', 'capsule', 'syrup', 'suspension', 'injection', 'ointment', 'cream', 'drops', 'inhaler', 'sachet', 'gel', 'other')`),
     check("drugs_item_type_check", sql`${t.itemType} IN ('medicine', 'consumable', 'instrument')`),
     check("drugs_pack_size_check", sql`${t.packSize} BETWEEN 1 AND 10000`),

@@ -22,6 +22,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
 COPY db ./db
 COPY scripts ./scripts
+# The reference-data loader reuses the app's pure parsing rules.
+COPY lib ./lib
+COPY features ./features
 USER node
 CMD ["node_modules/.bin/tsx", "scripts/db/bootstrap.ts"]
 

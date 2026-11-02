@@ -268,6 +268,7 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 - [x] **Items & opening stock import** (`/pharmacy/stock/import`): CSV with types, other names and batches; matches existing items by any name; all or nothing; idempotent
 - [x] Migration 0014; tests: 11 unit, 16 integration, 1 new e2e scenario (20 in total)
 - [x] **Selling by the strip and by the tablet** (client: "both"): each sale or dispensing line is loose units or packs. A pack sells at the item's pack price (set from the MRP on bills, editable, importable), so a strip costs exactly its MRP; stock always moves in units, and the course limit counts units. Receipts read "2 strips (30 tablets)". Migration 0015
+- [x] **Indian medicine list** (client choice: the public scraped "A-Z Medicine Dataset of India", licensing risk acknowledged): 2,53,973 brands in a shared read-only `ref.medicines` table, loaded on deploy from `db/reference/indian-medicines.csv.gz` only when the file changes. Pack labels and compositions become form, units per pack, generic name and strength. Searchable from the catalogue ("Add from Indian medicine list") and on supplier bills; adding copies an entry into the clinic's list once (linked by `reference_id`), never its dated MRP. Migrations 0016 (pg_trgm) and 0017
 - Deferred, to decide with the client: photographing a bill to fill the form automatically
 
 ---

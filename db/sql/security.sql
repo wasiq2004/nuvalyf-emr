@@ -48,6 +48,12 @@ END $$;
 GRANT USAGE ON SCHEMA app TO medflow_app, medflow_provisioner;
 GRANT USAGE ON SCHEMA platform TO medflow_app, medflow_platform, medflow_provisioner;
 GRANT USAGE ON SCHEMA sys TO medflow_app, medflow_platform;
+
+-- Shared reference lists (ref.*): every clinic reads them, nobody but the
+-- owner (scripts/db/reference.ts) writes them. No patient data.
+GRANT USAGE ON SCHEMA ref TO medflow_app;
+REVOKE ALL ON ALL TABLES IN SCHEMA ref FROM medflow_app, medflow_platform, medflow_provisioner;
+GRANT SELECT ON ALL TABLES IN SCHEMA ref TO medflow_app;
 GRANT EXECUTE ON FUNCTION app.current_clinic_id(), app.current_user_id() TO medflow_app, medflow_provisioner;
 
 -- ---------------------------------------------------------------------------
