@@ -13,6 +13,8 @@ import { closePrescriptionAction, dispenseAction, raiseQueryAction } from "@/fea
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { fromMinor, toMinor } from "@/lib/money";
 import { packWord, sellingPrice, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
+import { priceSale, taxModeFor } from "@/features/pharmacy/gst-rules";
+import type { CounterSettings } from "../../sale/CounterSale";
 import { cn } from "@/lib/utils";
 
 type StockOption = {
@@ -22,6 +24,8 @@ type StockOption = {
   price: string | null;
   packPrice: string | null;
   packSize: number;
+  gstRate: string | null;
+  rack: string | null;
   batchId: string;
   batchNo: string;
   expiryDate: string;
@@ -52,12 +56,25 @@ function defaultOption(item: DispenseItem) {
 
 const capitalize = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
 
-export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescriptionId: string; items: DispenseItem[]; currencyFormat: { locale: string; currency: string } }) {
+export function DispenseForm({
+  prescriptionId,
+  items,
+  currencyFormat,
+  settings,
+  canOverrideDiscount,
+}: {
+  prescriptionId: string;
+  items: DispenseItem[];
+  currencyFormat: { locale: string; currency: string };
+  settings: CounterSettings;
+  canOverrideDiscount: boolean;
+}) {
   const router = useRouter();
   const [key] = useState(() => crypto.randomUUID());
   const [pending, setPending] = useState(false);
   const [method, setMethod] = useState("cash");
   const [reference, setReference] = useState("");
+  const [discount, setDiscount] = useState("");
   const [choice, setChoice] = useState<Record<string, { batchId: string; quantity: string; soldAs: SoldAs }>>(() =>
     Object.fromEntries(items.map((i) => [i.id, { batchId: defaultOption(i), quantity: String(i.remaining ?? (i.dispensed > 0 ? 0 : 1)), soldAs: "unit" as SoldAs }])),
   );
@@ -75,11 +92,18 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
         // Packs only for products that come in packs.
         const soldAs: SoldAs = option.packSize > 1 ? c.soldAs : "unit";
         const price = sellingPrice(option, soldAs);
-        return [{ item, option, qty, soldAs, units: unitsFor(qty, soldAs, option.packSize), amount: price ? toMinor(price) * qty : 0 }];
+        const gstRate = option.gstRate !== null ? Number(option.gstRate) : settings.defaultGstRate;
+        return [{ item, option, qty, soldAs, gstRate, units: unitsFor(qty, soldAs, option.packSize), amount: price ? toMinor(price) * qty : 0 }];
       }),
-    [items, choice],
+    [items, choice, settings.defaultGstRate],
   );
-  const total = lines.reduce((sum, l) => sum + l.amount, 0);
+  const discountMinor = /^\d{1,8}(\.\d{1,2})?$/.test(discount.trim()) ? toMinor(discount.trim()) : 0;
+  const totals = priceSale(
+    lines.map((l) => ({ gross: l.amount, gstRate: l.gstRate })),
+    { discount: discountMinor, roundOff: settings.roundOff, mode: taxModeFor(settings.gstScheme, settings.stateCode, null) },
+  );
+  const total = totals.total;
+  const overLimit = !canOverrideDiscount && totals.gross > 0 && discountMinor * 100 > totals.gross * settings.maxDiscountPercent;
 
   async function submit() {
     setPending(true);
@@ -87,6 +111,7 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
       prescriptionId,
       method,
       reference,
+      discount: discountMinor ? fromMinor(discountMinor) : "",
       idempotencyKey: key,
       lines: lines.map((l) => ({ drugId: l.option.drugId, batchId: l.option.batchId, quantity: l.qty, soldAs: l.soldAs, prescriptionItemId: l.item.id })),
     });
@@ -202,7 +227,7 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
       </ol>
 
       <div className="flex flex-col gap-4 rounded-2xl border border-zinc-200 p-4 sm:flex-row sm:items-end sm:justify-between sm:p-5 dark:border-zinc-800">
-        <div className="grid flex-1 gap-3 sm:grid-cols-2">
+        <div className="grid flex-1 gap-3 sm:grid-cols-3">
           <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Paid by
             <select value={method} onChange={(e) => setMethod(e.target.value)} className={cn(inputClass, "mt-1.5 h-11")}>
@@ -211,7 +236,13 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
                   {PAYMENT_METHOD_LABELS[m]}
                 </option>
               ))}
+              <option value="credit">On the patient&apos;s account</option>
             </select>
+          </label>
+          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Discount (₹)
+            <input value={discount} onChange={(e) => setDiscount(e.target.value)} inputMode="decimal" placeholder="0" className={cn(inputClass, "mt-1.5 h-11", overLimit && "border-red-400")} />
+            {overLimit && <span className="mt-1 block text-xs text-red-600 dark:text-red-400">Above {settings.maxDiscountPercent} % needs a manager</span>}
           </label>
           <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Reference
@@ -220,13 +251,13 @@ export function DispenseForm({ prescriptionId, items, currencyFormat }: { prescr
         </div>
         <div className="flex items-center justify-between gap-4 sm:justify-end">
           <p className="text-right">
-            <span className="block text-xs uppercase tracking-wider text-zinc-500">Total</span>
+            <span className="block text-xs uppercase tracking-wider text-zinc-500">{totals.tax > 0 ? `Total incl. GST ${money(totals.tax)}` : "Total"}</span>
             <span className="text-2xl font-bold tabular-nums text-zinc-900 dark:text-zinc-50">{money(total)}</span>
           </p>
           <button
             type="button"
             onClick={submit}
-            disabled={pending || lines.length === 0 || lines.some((l) => l.item.remaining !== null && l.units > l.item.remaining)}
+            disabled={pending || overLimit || lines.length === 0 || lines.some((l) => l.item.remaining !== null && l.units > l.item.remaining)}
             className={buttonClass("primary", "lg")}
           >
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}

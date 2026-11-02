@@ -22,7 +22,7 @@ export async function listPlans(db: Queryable): Promise<PlanWithModules[]> {
       name: plans.name,
       description: plans.description,
       isActive: plans.isActive,
-      clinicCount: sql<number>`(select count(*)::int from ${clinics} where ${clinics.planId} = ${plans.id})`,
+      clinicCount: sql<number>`(select count(*)::int from ${clinics} where ${clinics.planId} = ${sql.raw('"plans"."id"')})`,
     })
     .from(plans)
     .orderBy(asc(plans.name));

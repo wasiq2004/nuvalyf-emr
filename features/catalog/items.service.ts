@@ -3,7 +3,7 @@ import "server-only";
 // Catalogue items beyond the clinical view: alternate names, matching a
 // supplier's spelling to an item, and the search used by bill entry and the
 // pharmacy counter. Normalisation rules live in item-rules.ts.
-import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
 import { drugAliases, drugs } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
@@ -49,7 +49,9 @@ export async function searchItems(tx: Tx, query: string, options: { types?: Item
   const tokens = searchTokens(query);
   if (tokens.length === 0) return [];
   const haystack = sql`(${drugs.name} || ' ' || ${drugs.genericName} || ' ' || coalesce(${drugs.manufacturer}, '') || ' ' || ${aliasText})`;
-  const conditions: SQL[] = [eq(drugs.isActive, true), ...tokens.map((t) => sql`${haystack} ilike ${`%${t.replace(/[%_\\]/g, "")}%`}`)];
+  // A scanned barcode matches exactly; typed words match anywhere in any name.
+  const byWords = and(...tokens.map((t) => sql`${haystack} ilike ${`%${t.replace(/[%_\\]/g, "")}%`}`))!;
+  const conditions: SQL[] = [eq(drugs.isActive, true), or(sql`${drugs.barcode} = ${query.trim()}`, byWords)!];
   if (options.types?.length) conditions.push(inArray(drugs.itemType, options.types));
   const rows = await tx
     .select()

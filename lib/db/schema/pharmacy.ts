@@ -55,11 +55,41 @@ export const stockMovements = appSchema.table(
     foreignKey({ name: "stock_movements_batch_fk", columns: [t.clinicId, t.batchId], foreignColumns: [stockBatches.clinicId, stockBatches.id] }),
     index("stock_movements_drug_idx").on(t.clinicId, t.drugId, t.createdAt),
     check("stock_movements_change_check", sql`${t.change} <> 0`),
-    check("stock_movements_reason_check", sql`${t.reason} IN ('opening', 'receipt', 'sale', 'dispense', 'adjustment', 'expired', 'damaged', 'return')`),
+    check("stock_movements_reason_check", sql`${t.reason} IN ('opening', 'receipt', 'sale', 'dispense', 'adjustment', 'expired', 'damaged', 'return', 'supplier_return')`),
   ],
 );
 
-/** A sale at the pharmacy counter, with or without a prescription. Paid in full. */
+/** Named buyers: walk-ins on credit, nursing homes (B2B), patients. */
+export const pharmacyCustomers = appSchema.table(
+  "pharmacy_customers",
+  {
+    id: id(),
+    clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    name: varchar("name", { length: 200 }).notNull(),
+    phone: varchar("phone", { length: 20 }),
+    address: varchar("address", { length: 300 }),
+    /** A registered business buyer: its sales are B2B in GSTR-1. */
+    gstin: varchar("gstin", { length: 15 }),
+    stateCode: varchar("state_code", { length: 2 }),
+    patientId: uuid("patient_id"),
+    /** Most they may owe; empty means no limit. */
+    creditLimit: numeric("credit_limit", { precision: 12, scale: 2 }),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("pharmacy_customers_clinic_id_id_key").on(t.clinicId, t.id),
+    foreignKey({ name: "pharmacy_customers_patient_fk", columns: [t.clinicId, t.patientId], foreignColumns: [patients.clinicId, patients.id] }),
+    uniqueIndex("pharmacy_customers_patient_idx").on(t.clinicId, t.patientId),
+    index("pharmacy_customers_name_idx").on(t.clinicId, t.name),
+  ],
+);
+
+/**
+ * A sale at the pharmacy counter, with or without a prescription: a tax
+ * invoice (or bill of supply), paid in full or on a named customer's credit.
+ * Sales from before GST setup have no fiscal year and no tax lines.
+ */
 export const pharmacySales = appSchema.table(
   "pharmacy_sales",
   {
@@ -70,6 +100,24 @@ export const pharmacySales = appSchema.table(
     prescriptionId: uuid("prescription_id"),
     customerName: varchar("customer_name", { length: 200 }),
     customerPhone: varchar("customer_phone", { length: 20 }),
+    /** Named customer (credit sales, B2B buyers). */
+    customerId: uuid("customer_id"),
+    /** Snapshot of the buyer's GSTIN: a B2B invoice in GSTR-1. */
+    customerGstin: varchar("customer_gstin", { length: 15 }),
+    /** "2026-27"; null for sales made before GST setup. */
+    fiscalYear: varchar("fiscal_year", { length: 7 }),
+    /** tax_invoice, bill_of_supply (composition / unregistered), or legacy cash_memo. */
+    documentType: varchar("document_type", { length: 20 }).notNull().default("cash_memo"),
+    /** IGST instead of CGST + SGST (a B2B buyer in another state). */
+    interState: boolean("inter_state").notNull().default(false),
+    /** Bill discount (tax-inclusive) and the round-off added after it. */
+    discount: numeric("discount", { precision: 12, scale: 2 }).notNull().default("0"),
+    roundOff: numeric("round_off", { precision: 12, scale: 2 }).notNull().default("0"),
+    taxTotal: numeric("tax_total", { precision: 12, scale: 2 }).notNull().default("0"),
+    /** Schedule H/H1/X details: who prescribed, and where the patient lives. */
+    prescriberName: varchar("prescriber_name", { length: 120 }),
+    prescriberRegNo: varchar("prescriber_reg_no", { length: 60 }),
+    patientAddress: varchar("patient_address", { length: 300 }),
     total: numeric("total", { precision: 12, scale: 2 }).notNull(),
     method: varchar("method", { length: 10 }).notNull(),
     reference: varchar("reference", { length: 100 }),
@@ -81,9 +129,13 @@ export const pharmacySales = appSchema.table(
     uniqueIndex("pharmacy_sales_number_idx").on(t.clinicId, t.number),
     foreignKey({ name: "pharmacy_sales_patient_fk", columns: [t.clinicId, t.patientId], foreignColumns: [patients.clinicId, patients.id] }),
     foreignKey({ name: "pharmacy_sales_rx_fk", columns: [t.clinicId, t.prescriptionId], foreignColumns: [prescriptions.clinicId, prescriptions.id] }),
+    foreignKey({ name: "pharmacy_sales_customer_fk", columns: [t.clinicId, t.customerId], foreignColumns: [pharmacyCustomers.clinicId, pharmacyCustomers.id] }),
     index("pharmacy_sales_sold_idx").on(t.clinicId, t.soldAt),
-    check("pharmacy_sales_method_check", sql`${t.method} IN ('cash', 'upi', 'card', 'other')`),
-    check("pharmacy_sales_total_check", sql`${t.total} >= 0`),
+    index("pharmacy_sales_customer_idx").on(t.clinicId, t.customerId),
+    check("pharmacy_sales_method_check", sql`${t.method} IN ('cash', 'upi', 'card', 'other', 'credit')`),
+    check("pharmacy_sales_total_check", sql`${t.total} >= 0 AND ${t.discount} >= 0 AND ${t.taxTotal} >= 0 AND ${t.roundOff} > -1 AND ${t.roundOff} < 1`),
+    check("pharmacy_sales_document_check", sql`${t.documentType} IN ('tax_invoice', 'bill_of_supply', 'cash_memo')`),
+    check("pharmacy_sales_credit_check", sql`${t.method} <> 'credit' OR ${t.customerId} IS NOT NULL`),
   ],
 );
 
@@ -108,13 +160,34 @@ export const pharmacySaleItems = appSchema.table(
     packs: integer("packs"),
     /** Price of what was sold: per unit, or per pack for pack lines. */
     unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+    /** Gross: price x quantity (or packs), tax-inclusive, before the bill discount. */
     amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+    /** This line's share of the bill discount. */
+    discount: numeric("discount", { precision: 12, scale: 2 }).notNull().default("0"),
+    /** What the line was sold for: amount - discount (tax-inclusive). */
+    net: numeric("net", { precision: 12, scale: 2 }).generatedAlwaysAs(sql`amount - discount`),
+    /** GST snapshot at the time of sale. Null taxable = sold before GST setup. */
+    hsn: varchar("hsn", { length: 8 }),
+    gstRate: numeric("gst_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+    taxable: numeric("taxable", { precision: 12, scale: 2 }),
+    cgst: numeric("cgst", { precision: 12, scale: 2 }).notNull().default("0"),
+    sgst: numeric("sgst", { precision: 12, scale: 2 }).notNull().default("0"),
+    igst: numeric("igst", { precision: 12, scale: 2 }).notNull().default("0"),
+    /** Drug schedule at the time of sale (H1/X lines form the register). */
+    schedule: varchar("schedule", { length: 5 }).notNull().default("none"),
+    /** Batch cost per unit when sold, for margin. */
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
   },
   (t) => [
     foreignKey({ name: "sale_items_sale_fk", columns: [t.clinicId, t.saleId], foreignColumns: [pharmacySales.clinicId, pharmacySales.id] }),
     foreignKey({ name: "sale_items_batch_fk", columns: [t.clinicId, t.batchId], foreignColumns: [stockBatches.clinicId, stockBatches.id] }),
     index("sale_items_sale_idx").on(t.saleId),
     index("sale_items_rx_item_idx").on(t.prescriptionItemId),
+    check("sale_items_discount_check", sql`${t.discount} >= 0 AND ${t.discount} <= ${t.amount}`),
+    check(
+      "sale_items_tax_check",
+      sql`${t.taxable} IS NULL OR (${t.taxable} >= 0 AND ${t.taxable} + ${t.cgst} + ${t.sgst} + ${t.igst} = ${t.amount} - ${t.discount})`,
+    ),
     check("sale_items_quantity_check", sql`${t.quantity} > 0`),
     check(
       "sale_items_amount_check",

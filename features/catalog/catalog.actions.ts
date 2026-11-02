@@ -18,6 +18,7 @@ import { AppError } from "@/lib/errors";
 import { importStarterCatalog } from "@/lib/catalog/seed";
 import { DRUG_FORMS, PRESET_KINDS, SEVERITIES, VITAL_KEYS } from "./catalog-options";
 import { ITEM_TYPES } from "./item-rules";
+import { SCHEDULES } from "@/features/pharmacy/schedule-rules";
 import { addAlias, getItemOption, removeAlias } from "./items.service";
 import { addFromReference, searchReference } from "./reference.service";
 import {
@@ -46,6 +47,11 @@ const itemFields = {
   strength: optionalText(60),
   manufacturer: optionalText(120),
   packSize: z.coerce.number({ message: "Units per pack must be a number" }).int("Whole units only").min(1, "At least 1").max(10000).default(1),
+  hsn: z.union([z.literal(""), z.string().trim().regex(/^\d{4,8}$/, "HSN is 4 to 8 digits")]).optional().transform((v) => v || undefined),
+  gstRate: optionalNumber(0, 40, "GST %"),
+  schedule: z.enum(SCHEDULES).default("none"),
+  rack: optionalText(40),
+  barcode: z.union([z.literal(""), z.string().trim().regex(/^[\x21-\x7e]{3,64}$/, "Use letters, digits or symbols, no spaces")]).optional().transform((v) => v || undefined),
 };
 
 /** Medicines need a generic name: it drives interaction and allergy checks. */

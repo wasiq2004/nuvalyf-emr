@@ -137,6 +137,8 @@ export async function enterBill(tx: Tx, clinicId: string, input: BillInput, acto
       }
       const updates: Partial<typeof drugs.$inferInsert> = {};
       if (line.packSize !== item.packSize) updates.packSize = line.packSize;
+      // Learn the item's GST rate from its first bill.
+      if (item.gstRate === null && line.gstRate > 0) updates.gstRate = String(line.gstRate);
       if (input.updatePrices && t.unitMrp && line.mrp) {
         if (t.unitMrp !== item.price) updates.price = t.unitMrp;
         // A strip sells at exactly its printed MRP, not units x a rounded unit price.

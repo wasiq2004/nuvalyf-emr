@@ -4,7 +4,7 @@ import { z } from "zod";
 import { ArrowLeft, ClipboardList, MessageCircleQuestion, ShieldAlert } from "lucide-react";
 import { PageHeader, PageShell, Panel } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
-import { requireClinic } from "@/lib/auth/clinic-session";
+import { can, requireClinic } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
@@ -14,6 +14,7 @@ import { getClinicSettings } from "@/features/settings/settings.service";
 import { getPrescriptionForDispensing } from "@/features/pharmacy/sales.service";
 import { listQueriesForPrescription } from "@/features/pharmacy/queries.service";
 import { ClosePrescriptionDialog, DispenseForm } from "./DispenseForm";
+import { getPharmacySettings } from "@/features/pharmacy/settings.service";
 
 export const metadata = { title: "Fill prescription" };
 
@@ -38,7 +39,12 @@ export default async function DispensePage({ params }: { params: Promise<{ id: s
       patientId: rx.patient.id,
       meta,
     });
-    return { rx, queries: await listQueriesForPrescription(tx, id), currency: (await getClinicSettings(tx, ctx.clinicId)).currency };
+    return {
+      rx,
+      queries: await listQueriesForPrescription(tx, id),
+      currency: (await getClinicSettings(tx, ctx.clinicId)).currency,
+      pharmacy: await getPharmacySettings(tx, ctx.clinicId),
+    };
   });
   if (!data) notFound();
   const { rx } = data;
@@ -110,7 +116,19 @@ export default async function DispensePage({ params }: { params: Promise<{ id: s
 
       <Panel title="Prescription" description={`Signed ${formatDateTime(rx.signedAt, ctx.timezone)}. Fill each line from a batch; earliest expiry is chosen first.`}>
         {open ? (
-          <DispenseForm prescriptionId={rx.prescriptionId} items={rx.items} currencyFormat={{ locale: DEFAULT_LOCALE, currency: data.currency }} />
+          <DispenseForm
+            prescriptionId={rx.prescriptionId}
+            items={rx.items}
+            currencyFormat={{ locale: DEFAULT_LOCALE, currency: data.currency }}
+            settings={{
+              roundOff: data.pharmacy.roundOff,
+              gstScheme: data.pharmacy.gstScheme,
+              stateCode: data.pharmacy.stateCode,
+              defaultGstRate: data.pharmacy.defaultGstRate,
+              maxDiscountPercent: data.pharmacy.maxDiscountPercent,
+            }}
+            canOverrideDiscount={can(ctx, "pharmacy:cancel")}
+          />
         ) : (
           <p className="text-sm text-zinc-500">This prescription is closed.</p>
         )}

@@ -73,7 +73,7 @@ function toSummary(row: typeof patients.$inferSelect & { lastVisitDate?: string 
 /** Search by record number, mobile (any format) or name (fuzzy). */
 export async function searchPatients(tx: Tx, query: string, today: string, limit = 50): Promise<PatientSummary[]> {
   const q = query.trim();
-  const lastVisit = sql<string | null>`(select max(${visits.visitDate})::text from ${visits} where ${visits.patientId} = ${patients.id})`;
+  const lastVisit = sql<string | null>`(select max(${visits.visitDate})::text from ${visits} where ${visits.patientId} = ${sql.raw('"patients"."id"')})`;
 
   if (!q) {
     const rows = await tx

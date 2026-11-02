@@ -10,6 +10,7 @@ export * from "./catalog";
 export * from "./clinical";
 export * from "./billing";
 export * from "./pharmacy";
+export * from "./pharmacy-documents";
 export * from "./messaging";
 export * from "./analytics";
 export * from "./reference";

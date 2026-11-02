@@ -14,7 +14,7 @@ import { addDaysToDateString, todayInTimeZone, zonedTimeToUtc } from "@/lib/time
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { listPrescriptionQueue, salesBetween, salesTotal } from "@/features/pharmacy/sales.service";
 import { listStock } from "@/features/pharmacy/stock.service";
-import { PAYMENT_METHOD_LABELS, type PaymentMethod } from "@/features/billing/billing-rules";
+import { MONEY_METHOD_LABELS } from "@/components/pharmacy/status";
 
 export const metadata = { title: "Pharmacy" };
 
@@ -61,7 +61,7 @@ export default async function PharmacyPage() {
 
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Prescriptions waiting" value={data.queue.length} icon={ClipboardList} hint={`${data.queue.filter((q) => q.dispenseStatus === "partial").length} part-filled`} />
-        <StatCard label="Sales today" value={money(data.totals.total)} icon={Banknote} hint={`${data.totals.count} ${data.totals.count === 1 ? "sale" : "sales"}`} />
+        <StatCard label="Sales today" value={money(data.totals.total)} icon={Banknote} hint={`${data.totals.count} ${data.totals.count === 1 ? "sale" : "sales"}${data.totals.returned !== "0.00" ? ` · ${money(data.totals.returned)} returned` : ""}`} />
         <StatCard label="Low or out of stock" value={data.stock.filter((s) => s.flags.includes("low") || s.flags.includes("out")).length} icon={PackageX} />
         <StatCard label="Expiring / expired" value={data.stock.filter((s) => s.flags.includes("expiring") || s.flags.includes("expired")).length} icon={AlertTriangle} hint="Within 90 days" />
       </div>
@@ -142,7 +142,7 @@ export default async function PharmacyPage() {
                         </span>
                       </span>
                       <span className="text-sm font-semibold tabular-nums">
-                        {money(sale.total)} <span className="text-xs font-normal text-zinc-500">{PAYMENT_METHOD_LABELS[sale.method as PaymentMethod]}</span>
+                        {money(sale.total)} <span className="text-xs font-normal text-zinc-500">{MONEY_METHOD_LABELS[sale.method] ?? sale.method}</span>
                       </span>
                     </Link>
                   </li>

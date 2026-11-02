@@ -33,6 +33,15 @@ export const drugs = appSchema.table(
     price: numeric("price", { precision: 10, scale: 2 }),
     /** Selling price per pack (a strip's MRP). Empty: units x unit price. */
     packPrice: numeric("pack_price", { precision: 10, scale: 2 }),
+    /** GST: HSN code and rate; empty = the pharmacy's defaults for medicines. */
+    hsn: varchar("hsn", { length: 8 }),
+    gstRate: numeric("gst_rate", { precision: 5, scale: 2 }),
+    /** Drugs and Cosmetics Rules schedule: none, G, H, H1 or X. */
+    schedule: varchar("schedule", { length: 5 }).notNull().default("none"),
+    /** Where it sits in the pharmacy, e.g. "A3". */
+    rack: varchar("rack", { length: 40 }),
+    /** Printed or manufacturer barcode; unique in the clinic. */
+    barcode: varchar("barcode", { length: 64 }),
     /** Alert when stock on hand falls to this level (pharmacy module). */
     reorderLevel: integer("reorder_level").notNull().default(0),
     isActive: boolean("is_active").notNull().default(true),
@@ -43,9 +52,12 @@ export const drugs = appSchema.table(
     unique("drugs_clinic_id_id_key").on(t.clinicId, t.id),
     uniqueIndex("drugs_clinic_starter_idx").on(t.clinicId, t.starterKey),
     uniqueIndex("drugs_clinic_reference_idx").on(t.clinicId, t.referenceId),
+    uniqueIndex("drugs_clinic_barcode_idx").on(t.clinicId, t.barcode),
     check("drugs_form_check", sql`${t.form} IN ('tablet', 'capsule', 'syrup', 'suspension', 'injection', 'ointment', 'cream', 'drops', 'inhaler', 'sachet', 'gel', 'other')`),
     check("drugs_item_type_check", sql`${t.itemType} IN ('medicine', 'consumable', 'instrument')`),
     check("drugs_pack_size_check", sql`${t.packSize} BETWEEN 1 AND 10000`),
+    check("drugs_schedule_check", sql`${t.schedule} IN ('none', 'G', 'H', 'H1', 'X')`),
+    check("drugs_gst_rate_check", sql`${t.gstRate} IS NULL OR ${t.gstRate} BETWEEN 0 AND 40`),
   ],
 );
 

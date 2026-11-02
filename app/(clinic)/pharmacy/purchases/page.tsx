@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { forbidden } from "next/navigation";
-import { Building2, ReceiptText, Truck } from "lucide-react";
+import { Building2, PackageMinus, ReceiptText, Repeat, Truck } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
@@ -12,6 +12,7 @@ import { formatMoney } from "@/lib/money";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { listBills } from "@/features/pharmacy/bills.service";
 import { listOrders, listSuppliers } from "@/features/pharmacy/purchasing.service";
+import { listPurchaseReturns } from "@/features/pharmacy/supplier-accounts.service";
 import { NewOrderDialog, SupplierDialog } from "./PurchaseForms";
 import { ORDER_STATUS } from "@/components/pharmacy/status";
 
@@ -27,6 +28,7 @@ export default async function PurchasesPage() {
     orders: await listOrders(tx),
     suppliers: await listSuppliers(tx),
     bills: await listBills(tx),
+    debitNotes: await listPurchaseReturns(tx, 20),
     currency: (await getClinicSettings(tx, ctx.clinicId)).currency,
   }));
   const canCreate = can(ctx, "purchase:create");
@@ -41,6 +43,16 @@ export default async function PurchasesPage() {
         description="Type in a supplier's bill to add its items to stock, or raise a purchase order that someone else approves before the delivery is received."
         actions={
           <>
+            {canCreate && (
+              <ButtonLink href="/pharmacy/reorder" variant="secondary">
+                <Repeat className="h-4 w-4" /> Reorder
+              </ButtonLink>
+            )}
+            {canEnterBills && (
+              <ButtonLink href="/pharmacy/purchases/returns/new" variant="secondary">
+                <PackageMinus className="h-4 w-4" /> Return to supplier
+              </ButtonLink>
+            )}
             {canCreate && data.suppliers.some((s) => s.isActive) && <NewOrderDialog suppliers={data.suppliers.filter((s) => s.isActive)} />}
             {canEnterBills && (
               <ButtonLink href="/pharmacy/purchases/bills/new">
@@ -81,6 +93,30 @@ export default async function PurchasesPage() {
           ]}
         />
       </Panel>
+
+      {data.debitNotes.length > 0 && (
+        <Panel flush title="Returned to suppliers" description="Debit notes for stock sent back. Each one reduced stock and what is owed to the supplier.">
+          <DataTable
+            rows={data.debitNotes}
+            rowKey={(n) => n.id}
+            columns={[
+              {
+                key: "note",
+                header: "Debit note",
+                cell: (n) => (
+                  <Link href={`/pharmacy/purchases/returns/${n.id}`} className="group block">
+                    <p className="font-medium text-zinc-900 group-hover:underline dark:text-zinc-100">{n.supplierName}</p>
+                    <p className="font-mono text-xs text-zinc-500">{n.number}</p>
+                  </Link>
+                ),
+              },
+              { key: "reason", header: "Reason", hideOnMobile: true, cell: (n) => n.reason },
+              { key: "date", header: "Date", hideOnMobile: true, cell: (n) => formatDate(n.createdAt, ctx.timezone) },
+              { key: "total", header: "Value", align: "right", cell: (n) => <span className="font-semibold tabular-nums">{formatMoney(n.total, data.currency)}</span> },
+            ]}
+          />
+        </Panel>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-3">
         <Panel flush title="Purchase orders" description={awaiting ? `${awaiting} awaiting approval` : undefined} className="min-w-0 xl:col-span-2">

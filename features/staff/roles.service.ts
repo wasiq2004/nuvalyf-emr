@@ -23,7 +23,7 @@ export async function listRoles(tx: Tx): Promise<RoleWithPermissions[]> {
       key: roles.key,
       name: roles.name,
       description: roles.description,
-      memberCount: sql<number>`(select count(*)::int from ${userRoles} where ${userRoles.roleId} = ${roles.id})`,
+      memberCount: sql<number>`(select count(*)::int from ${userRoles} where ${userRoles.roleId} = ${sql.raw('"roles"."id"')})`,
     })
     .from(roles)
     .orderBy(asc(roles.name));

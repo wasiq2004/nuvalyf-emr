@@ -10,7 +10,7 @@ import { AppError, pgError } from "@/lib/errors";
 import { staffName } from "@/features/clinical/encounters.service";
 import { isExpired, stockFlags, type StockFlag } from "./stock-rules";
 
-export type MovementReason = "opening" | "receipt" | "sale" | "dispense" | "adjustment" | "expired" | "damaged" | "return";
+export type MovementReason = "opening" | "receipt" | "sale" | "dispense" | "adjustment" | "expired" | "damaged" | "return" | "supplier_return";
 
 /** Inserts a ledger row; maps "would go below zero" to a clear message. */
 export async function moveStock(
@@ -49,6 +49,8 @@ export type StockRow = {
   packPrice: string | null;
   packSize: number;
   reorderLevel: number;
+  rack: string | null;
+  barcode: string | null;
   isActive: boolean;
   onHand: number;
   nearestExpiry: string | null;
@@ -87,6 +89,8 @@ export async function listStock(tx: Tx, today: string, now = new Date()): Promis
         packPrice: d.packPrice,
         packSize: d.packSize,
         reorderLevel: d.reorderLevel,
+        rack: d.rack,
+        barcode: d.barcode,
         isActive: d.isActive,
         onHand,
         nearestExpiry: held[0]?.expiryDate ?? null,

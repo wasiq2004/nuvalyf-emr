@@ -65,7 +65,7 @@ export function categoryOf(action: string): AuditCategory {
   if (action.startsWith("LOGIN") || action.startsWith("PASSWORD_")) return "sign-in";
   if (isClinicalAction(action)) return "clinical";
   if (/^(INVOICE|PAYMENT|REFUND)_/.test(action)) return "billing";
-  if (/^(PHARMACY|STOCK|PURCHASE_ORDER|SUPPLIER|REORDER)_/.test(action)) return "pharmacy";
+  if (/^(PHARMACY|STOCK|PURCHASE|SUPPLIER|REORDER|BARCODES|CUSTOMER_RECEIPT)(_|$)/.test(action)) return "pharmacy";
   if (/^(PATIENT|APPOINTMENT|WALK_IN|QUEUE|VISIT|TASK|EMERGENCY|DUPLICATE)_/.test(action)) return "front desk";
   return "administration";
 }

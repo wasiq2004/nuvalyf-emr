@@ -43,6 +43,10 @@ export const PERMISSIONS = {
   "purchase:create": { label: "Raise purchase orders", group: "Pharmacy", module: "pharmacy", adjustable: true },
   "purchase:approve": { label: "Approve purchase orders", group: "Pharmacy", module: "pharmacy", adjustable: true },
   "medicine:manage": { label: "Edit the medicine list", group: "Pharmacy", adjustable: true },
+  "pharmacy:return": { label: "Take back sold items (credit notes)", group: "Pharmacy", module: "pharmacy", adjustable: true },
+  "pharmacy:cancel": { label: "Cancel sales and give discounts above the limit", group: "Pharmacy", module: "pharmacy", adjustable: true },
+  "pharmacy:reports": { label: "View pharmacy, GST and Schedule H1 reports", group: "Pharmacy", module: "pharmacy", adjustable: true },
+  "accounts:manage": { label: "Customer credit, receipts and supplier payments", group: "Pharmacy", module: "pharmacy", adjustable: true },
 
   // Billing
   "billing:read": { label: "View invoices and payments", group: "Billing", adjustable: true },

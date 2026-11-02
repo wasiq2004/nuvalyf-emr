@@ -33,6 +33,18 @@ export const searchSellableAction = clinicAction(
   async ({ session, db }, input) => db((tx) => sellableStock(tx, input.query, todayInTimeZone(session.timezone))),
 );
 
+/** Discount, buyer and Schedule H/H1/X details, shared by counter sales and dispensing. */
+const saleExtras = {
+  method: z.enum([...PAYMENT_METHODS, "credit"]),
+  reference: optionalText(100),
+  discount: optionalMoney,
+  customerId: optionalId,
+  prescriberName: optionalText(120),
+  prescriberRegNo: optionalText(60),
+  patientAddress: optionalText(300),
+  idempotencyKey,
+};
+
 export const counterSaleAction = clinicAction(
   {
     name: "pharmacy.counterSale",
@@ -42,16 +54,26 @@ export const counterSaleAction = clinicAction(
       lines: z.array(saleLine).min(1, "Add at least one medicine").max(50),
       customerName: optionalText(200),
       customerPhone: optionalPhone,
-      method: z.enum(PAYMENT_METHODS),
-      reference: optionalText(100),
-      idempotencyKey,
+      ...saleExtras,
     }),
   },
   async ({ session, db, audit }, input) =>
     db(async (tx) => {
-      const { result, replayed } = await sell(tx, session.clinicId, { ...input, lines: input.lines.map((l) => ({ ...l, prescriptionItemId: null })) }, session.userId, todayInTimeZone(session.timezone));
+      const { result, replayed } = await sell(
+        tx,
+        session.clinicId,
+        { ...input, lines: input.lines.map((l) => ({ ...l, prescriptionItemId: null })) },
+        session.userId,
+        todayInTimeZone(session.timezone),
+        { overrideDiscountLimit: session.permissions.has("pharmacy:cancel") },
+      );
       if (!replayed) {
-        await audit(tx, { action: "PHARMACY_SALE", targetType: "pharmacy_sale", targetId: result.saleId, details: { number: result.number, total: result.total, method: input.method } });
+        await audit(tx, {
+          action: "PHARMACY_SALE",
+          targetType: "pharmacy_sale",
+          targetId: result.saleId,
+          details: { number: result.number, total: result.total, method: input.method, discount: input.discount ?? "0", customer: input.customerId ?? null },
+        });
       }
       return result;
     }),
@@ -65,14 +87,14 @@ export const dispenseAction = clinicAction(
     schema: z.object({
       prescriptionId: idField,
       lines: z.array(saleLine.extend({ prescriptionItemId: idField })).min(1, "Fill at least one line").max(50),
-      method: z.enum(PAYMENT_METHODS),
-      reference: optionalText(100),
-      idempotencyKey,
+      ...saleExtras,
     }),
   },
   async ({ session, db, audit }, input) =>
     db(async (tx) => {
-      const { result, replayed } = await sell(tx, session.clinicId, input, session.userId, todayInTimeZone(session.timezone));
+      const { result, replayed } = await sell(tx, session.clinicId, input, session.userId, todayInTimeZone(session.timezone), {
+        overrideDiscountLimit: session.permissions.has("pharmacy:cancel"),
+      });
       if (!replayed) {
         await audit(tx, {
           action: "PRESCRIPTION_DISPENSED",

@@ -46,6 +46,12 @@ export type DrugInput = {
   price?: string;
   /** Price of a whole pack (a strip's MRP). */
   packPrice?: string;
+  hsn?: string;
+  /** GST %; empty uses the pharmacy's default. */
+  gstRate?: number | null;
+  schedule?: string;
+  rack?: string;
+  barcode?: string;
   allergyClassIds: string[];
 };
 
@@ -103,21 +109,35 @@ function drugValues(input: DrugInput) {
     defaultInstructions: medicine ? (input.defaultInstructions ?? null) : null,
     price: money(input.price),
     packPrice: (input.packSize ?? 1) > 1 ? money(input.packPrice) : null,
+    hsn: input.hsn ?? null,
+    gstRate: input.gstRate === null || input.gstRate === undefined ? null : String(input.gstRate),
+    schedule: medicine ? (input.schedule ?? "none") : "none",
+    rack: input.rack ?? null,
+    barcode: input.barcode ?? null,
   };
 }
 
+/** A barcode belongs to one item. */
+async function guardBarcode<T>(work: () => Promise<T>, barcode: string | undefined): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (barcode && isUniqueViolation(error)) throw new AppError(`Barcode ${barcode} is already on another item.`);
+    throw error;
+  }
+}
+
 export async function createDrug(tx: Tx, clinicId: string, input: DrugInput) {
-  const [row] = await tx.insert(drugs).values({ clinicId, ...drugValues(input) }).returning({ id: drugs.id });
+  const [row] = await guardBarcode(() => tx.insert(drugs).values({ clinicId, ...drugValues(input) }).returning({ id: drugs.id }), input.barcode);
   await setDrugClasses(tx, clinicId, row.id, (input.itemType ?? "medicine") === "medicine" ? input.allergyClassIds : []);
   return row;
 }
 
 export async function updateDrug(tx: Tx, clinicId: string, id: string, input: DrugInput) {
-  const [row] = await tx
-    .update(drugs)
-    .set({ ...drugValues(input), updatedAt: new Date() })
-    .where(eq(drugs.id, id))
-    .returning({ id: drugs.id });
+  const [row] = await guardBarcode(
+    () => tx.update(drugs).set({ ...drugValues(input), updatedAt: new Date() }).where(eq(drugs.id, id)).returning({ id: drugs.id }),
+    input.barcode,
+  );
   if (!row) throw new AppError("Medicine not found.");
   await setDrugClasses(tx, clinicId, id, (input.itemType ?? "medicine") === "medicine" ? input.allergyClassIds : []);
   return row;

@@ -6,6 +6,7 @@ import { parseCsv } from "@/features/import/import-rules";
 import { normalizeExpiry } from "./purchase-rules";
 import { DRUG_FORMS } from "@/features/catalog/catalog-options";
 import { ITEM_TYPES, normalizeItemName, type ItemType } from "@/features/catalog/item-rules";
+import { SCHEDULES } from "./schedule-rules";
 import { isValidDateString } from "@/lib/time";
 
 export { parseCsv, normalizeExpiry };
@@ -25,6 +26,11 @@ const COLUMNS: Record<string, string[]> = {
   packPrice: ["pack price", "price per pack", "strip price", "mrp per pack", "mrp"],
   reorderLevel: ["reorder level", "reorder", "min stock", "minimum stock"],
   otherNames: ["other names", "aliases", "also known as"],
+  hsn: ["hsn", "hsn code", "hsn sac"],
+  gstRate: ["gst", "gst %", "gst rate", "tax %", "tax rate"],
+  schedule: ["schedule", "drug schedule"],
+  rack: ["rack", "location", "shelf"],
+  barcode: ["barcode", "bar code", "ean"],
   batchNo: ["batch no", "batch", "batch number"],
   expiryDate: ["expiry date", "expiry", "exp", "exp date"],
   quantity: ["quantity", "qty", "stock", "units", "opening stock"],
@@ -56,6 +62,11 @@ export type StockImportRow = {
   packSize: number;
   price: string | null;
   packPrice: string | null;
+  hsn: string | null;
+  gstRate: number | null;
+  schedule: string;
+  rack: string | null;
+  barcode: string | null;
   reorderLevel: number;
   otherNames: string[];
   batch: { batchNo: string; expiryDate: string; quantity: number; unitCost: string | null } | null;
@@ -107,6 +118,17 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
     const reorderLevel = reorderRaw ? Number(reorderRaw) : 0;
     if (!Number.isInteger(reorderLevel) || reorderLevel < 0) problem("reorderLevel", "Reorder level must be a whole number");
 
+    const hsn = cell(row, "hsn").replace(/\s+/g, "");
+    if (hsn && !/^\d{4,8}$/.test(hsn)) problem("hsn", `"${hsn}" is not an HSN code (4 to 8 digits)`);
+    const gstRaw = cell(row, "gstRate").replace("%", "").trim();
+    const gstRate = gstRaw === "" ? null : Number(gstRaw);
+    if (gstRate !== null && !(Number.isFinite(gstRate) && gstRate >= 0 && gstRate <= 40)) problem("gstRate", `"${gstRaw}" is not a GST rate`);
+    const scheduleRaw = cell(row, "schedule").toUpperCase().replace(/^SCH(EDULE)?\s*/, "");
+    const schedule = scheduleRaw === "" || scheduleRaw === "NONE" ? "none" : scheduleRaw;
+    if (!(SCHEDULES as readonly string[]).includes(schedule)) problem("schedule", `"${cell(row, "schedule")}" is not none, G, H, H1 or X`);
+    const barcode = cell(row, "barcode");
+    if (barcode && !/^[\x21-\x7e]{3,64}$/.test(barcode)) problem("barcode", "Barcode has spaces or unusual characters");
+
     const otherNames = cell(row, "otherNames")
       .split(/[;|]/)
       .map((n) => n.trim().replace(/\s+/g, " "))
@@ -150,6 +172,11 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
       packSize,
       price: price || null,
       packPrice: packPrice || null,
+      hsn: hsn || null,
+      gstRate,
+      schedule,
+      rack: cell(row, "rack").slice(0, 40) || null,
+      barcode: barcode || null,
       reorderLevel,
       otherNames,
       batch,

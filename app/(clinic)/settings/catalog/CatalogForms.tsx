@@ -23,6 +23,8 @@ import {
 } from "@/features/catalog/catalog.actions";
 import { DRUG_FORMS, PRESET_KIND_LABELS, PRESET_KINDS, SEVERITIES, capitalize } from "@/features/catalog/catalog-options";
 import { ITEM_TYPE_LABELS, ITEM_TYPES, isItemType, type ItemType } from "@/features/catalog/item-rules";
+import { SALE_GST_RATES } from "@/features/pharmacy/gst-rules";
+import { SCHEDULE_LABELS, SCHEDULES } from "@/features/pharmacy/schedule-rules";
 import { VITAL_FIELDS } from "@/features/clinical/vital-rules";
 
 function DialogTrigger({ editing, label }: { editing: boolean; label: string }) {
@@ -63,6 +65,11 @@ export type DrugValues = {
   defaultInstructions: string;
   price: string;
   packPrice: string;
+  hsn: string;
+  gstRate: string;
+  schedule: string;
+  rack: string;
+  barcode: string;
   allergyClassIds: string[];
   aliases: { id: string; alias: string }[];
 };
@@ -118,6 +125,30 @@ export function DrugDialog({ values, classes }: { values?: DrugValues; classes: 
               </Field>
               <Field label="Price per pack" name="packPrice" hint="A whole strip or pack, e.g. its MRP. Empty: units × price per unit.">
                 <TextInput name="packPrice" inputMode="decimal" defaultValue={values?.packPrice} />
+              </Field>
+            </div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Tax, law and shelf</p>
+            <div className="grid gap-5 sm:grid-cols-3">
+              <Field label="HSN" name="hsn" hint={medicine ? "Empty: the pharmacy default (3004)" : undefined}>
+                <TextInput name="hsn" defaultValue={values?.hsn} inputMode="numeric" maxLength={8} />
+              </Field>
+              <Field label="GST %" name="gstRate" hint="Empty: the pharmacy default">
+                <SelectInput
+                  name="gstRate"
+                  defaultValue={values?.gstRate ?? ""}
+                  options={[{ value: "", label: "Default" }, ...SALE_GST_RATES.map((r) => ({ value: String(r), label: `${r} %` }))]}
+                />
+              </Field>
+              {medicine && (
+                <Field label="Schedule" name="schedule" hint="H1 and X go into the register">
+                  <SelectInput name="schedule" defaultValue={values?.schedule ?? "none"} options={SCHEDULES.map((s) => ({ value: s, label: SCHEDULE_LABELS[s] }))} />
+                </Field>
+              )}
+              <Field label="Rack" name="rack" hint="Where it sits, e.g. A3">
+                <TextInput name="rack" defaultValue={values?.rack} maxLength={40} />
+              </Field>
+              <Field label="Barcode" name="barcode" hint="Scan it into this box">
+                <TextInput name="barcode" defaultValue={values?.barcode} maxLength={64} autoComplete="off" />
               </Field>
             </div>
             {medicine && (

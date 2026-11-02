@@ -27,6 +27,9 @@ describe("redaction", () => {
     expect(categoryOf("VITALS_RECORDED")).toBe("clinical");
     expect(categoryOf("REFUND_RECORDED")).toBe("billing");
     expect(categoryOf("STOCK_ADJUSTED")).toBe("pharmacy");
+    for (const action of ["PURCHASE_RETURNED", "PURCHASE_BILL_ENTERED", "SUPPLIER_PAYMENT", "CUSTOMER_RECEIPT", "BARCODES_ASSIGNED", "PHARMACY_REPORT_EXPORTED"]) {
+      expect(categoryOf(action)).toBe("pharmacy");
+    }
     expect(categoryOf("APPOINTMENT_BOOKED")).toBe("front desk");
     expect(categoryOf("STAFF_CREATED")).toBe("administration");
   });

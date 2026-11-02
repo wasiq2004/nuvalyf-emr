@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Boxes, FileUp } from "lucide-react";
+import { Barcode, Boxes, FileUp } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
 import { packWord } from "@/features/pharmacy/selling-rules";
@@ -59,11 +59,16 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
         title="Stock"
         description="On hand per item, from the movement ledger. Open an item to add stock, write off expired or damaged units, or set its reorder level."
         actions={
-          can(ctx, "medicine:manage") ? (
-            <ButtonLink href="/pharmacy/stock/import" variant="secondary">
-              <FileUp className="h-4 w-4" /> Import items &amp; stock
+          <>
+            <ButtonLink href="/pharmacy/stock/labels" variant="secondary">
+              <Barcode className="h-4 w-4" /> Shelf labels
             </ButtonLink>
-          ) : undefined
+            {can(ctx, "medicine:manage") && (
+              <ButtonLink href="/pharmacy/stock/import" variant="secondary">
+                <FileUp className="h-4 w-4" /> Import items &amp; stock
+              </ButtonLink>
+            )}
+          </>
         }
       />
       <TabNav
@@ -90,7 +95,10 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
                   <p className="flex flex-wrap items-center gap-2 font-medium text-zinc-900 group-hover:underline dark:text-zinc-100">
                     {r.name} <ItemTypeBadge type={r.itemType} />
                   </p>
-                  <p className="text-xs text-zinc-500">{r.itemType === "medicine" ? `${r.genericName} · ${r.form}` : (r.manufacturer ?? "—")}</p>
+                  <p className="text-xs text-zinc-500">
+                    {r.itemType === "medicine" ? `${r.genericName} · ${r.form}` : (r.manufacturer ?? "—")}
+                    {r.rack && <span className="ml-1.5 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[11px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">Rack {r.rack}</span>}
+                  </p>
                 </Link>
               ),
             },

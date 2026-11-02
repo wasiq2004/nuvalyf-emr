@@ -127,6 +127,20 @@
       "when": 1793646116810,
       "tag": "0017_reference_medicines",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793648228509,
+      "tag": "0018_pharmacy_gst_returns_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793648245241,
+      "tag": "0019_grant_pharmacy_permissions",
+      "breakpoints": true
     }
   ]
 }

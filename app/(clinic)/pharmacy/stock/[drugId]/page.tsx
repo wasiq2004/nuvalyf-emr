@@ -26,6 +26,7 @@ const REASON: Record<string, string> = {
   expired: "Expired",
   damaged: "Damaged",
   return: "Customer return",
+  supplier_return: "Returned to supplier",
 };
 
 export default async function DrugStockPage({ params }: { params: Promise<{ drugId: string }> }) {

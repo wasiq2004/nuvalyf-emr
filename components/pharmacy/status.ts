@@ -9,3 +9,21 @@ export const ORDER_STATUS: Record<string, { label: string; tone: BadgeTone }> = 
   received: { label: "Received", tone: "success" },
   cancelled: { label: "Cancelled", tone: "neutral" },
 };
+
+/** How money moved on a pharmacy document. */
+export const MONEY_METHOD_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  card: "Card",
+  other: "Other",
+  credit: "On account",
+  account: "To the account",
+  bank: "Bank transfer",
+  cheque: "Cheque",
+};
+
+export const DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  tax_invoice: "Tax invoice",
+  bill_of_supply: "Bill of supply",
+  cash_memo: "Cash memo",
+};

@@ -208,6 +208,14 @@ describe("check-in and queue", () => {
     await expect(run((tx) => checkInAppointment(tx, clinic.clinicId, appt.id, adminId, today))).rejects.toThrow(/Only a booked/);
   });
 
+  it("shows each patient's last visit in the recent list", async () => {
+    // Regression: the last-visit subquery once compared against the visit's own id.
+    const patient = await run((tx) => registerPatient(tx, clinic.clinicId, { firstName: "Lastvisit", sex: "male", statedAgeYears: 40 }, { likelyIds: [], actorId: adminId, today }));
+    await run((tx) => addWalkIn(tx, clinic.clinicId, { patientId: patient.id }, adminId, today));
+    const recent = await run((tx) => searchPatients(tx, "", today));
+    expect(recent.find((p) => p.id === patient.id)?.lastVisitDate).toBe(today);
+  });
+
   it("a patient cannot be in today's queue twice", async () => {
     const patient = await register("Walkin", { lastName: "Twice" });
     await run((tx) => addWalkIn(tx, clinic.clinicId, { patientId: patient.id }, adminId, today));

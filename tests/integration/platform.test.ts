@@ -6,7 +6,7 @@ import { connect, ownerSql, testUrls } from "./test-db";
 import { withPlatform, withProvisioner, withClinic } from "@/lib/db";
 import { onboardClinic, rescueClinicAdmin } from "@/features/platform/onboarding.service";
 import { setClinicPlan, setClinicStatus } from "@/features/platform/clinics.service";
-import { createPlan } from "@/features/platform/plans.service";
+import { createPlan, listPlans } from "@/features/platform/plans.service";
 import { createOperator, updateOperator } from "@/features/platform/operators.service";
 import { verifyClinicLogin } from "@/features/auth/clinic-login.service";
 import { loadClinicContext } from "@/features/auth/clinic-context.service";
@@ -144,6 +144,8 @@ describe("session context and modules", () => {
   it("switches module permissions on when the plan includes the module", async () => {
     const plan = await withPlatform((db) => createPlan(db, { name: `Pharmacy plan ${suffix}`, modules: ["pharmacy"] }));
     await withPlatform((db) => setClinicPlan(db, { clinicId, planId: plan.id }));
+    // The plan list counts the clinic on it (regression: the count once read the wrong table's id).
+    expect((await withPlatform((db) => listPlans(db))).find((p) => p.id === plan.id)?.clinicCount).toBe(1);
 
     const state = await loadClinicContext(clinicId, adminId, 1);
     expect(state.status).toBe("ok");

@@ -98,6 +98,11 @@ export async function runStockImport(tx: Tx, clinicId: string, input: { fileName
           packSize: row.packSize,
           price: row.price ?? undefined,
           packPrice: row.packPrice ?? undefined,
+          hsn: row.hsn ?? undefined,
+          gstRate: row.gstRate,
+          schedule: row.schedule,
+          rack: row.rack ?? undefined,
+          barcode: row.barcode ?? undefined,
           defaultDurationDays: null,
           allergyClassIds: [],
         });

@@ -360,7 +360,8 @@ test("Pharmacist stocks the shelf, fills the prescription once, and sells over t
   await expect(page.getByLabel("Quantity of Paracetamol 650")).toHaveValue("9");
   await page.getByRole("button", { name: /Dispense & take/ }).dblclick();
   await page.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
-  await expect(page.getByRole("heading", { name: "₹22.50" })).toBeVisible();
+  // 9 x ₹2.50 = ₹22.50, rounded to the rupee on the bill.
+  await expect(page.getByRole("heading", { name: "₹23.00" })).toBeVisible();
 
   await page.goto("/pharmacy");
   await expect(page.locator("tr", { hasText: patientName })).toHaveCount(0);
@@ -501,6 +502,80 @@ test("The Indian medicine list: find a brand, add it, and use it straight from a
   await page.getByRole("listbox", { name: "Medicine list matches for item, line 1" }).getByRole("option").first().click();
   await expect(page.getByLabel("Units per pack, line 1")).toHaveValue("10");
   await expect(page.getByText("Augmentin 625 Duo Tablet").first()).toBeVisible();
+});
+
+test("Pharmacist gives a discount, sells on account, takes a return, collects the balance, and the reports agree", async () => {
+  const page = pharmPage;
+  const buyer = `Lakshmi Stores ${suffix}`;
+  await page.goto("/pharmacy/sale");
+  await page.getByRole("searchbox", { name: "Search stock" }).fill("Paracetamol 650");
+  await page.getByRole("button", { name: /Paracetamol 650/ }).click();
+  await page.getByLabel("Quantity of Paracetamol 650").fill("10");
+  await page.getByLabel(/^Discount/).fill("1");
+  await expect(page.getByText("Taxable value")).toBeVisible();
+
+  // A named customer, added at the counter, buying on account.
+  await page.getByRole("searchbox", { name: "Find a customer" }).fill(buyer);
+  await page.getByRole("button", { name: `New customer “${buyer}”` }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add customer" }).click();
+  await expect(page.getByRole("button", { name: "Remove customer" })).toBeVisible();
+  await page.getByLabel("Paid by").selectOption("credit");
+  await page.getByRole("button", { name: "Complete sale" }).click();
+  await page.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
+  await expect(page.getByText(/Tax invoice/).first()).toBeVisible();
+  await expect(page.getByText("CGST", { exact: true })).toBeVisible();
+
+  // Two tablets come back: a credit note to the account, stock back in the batch.
+  await page.getByRole("button", { name: "Return items" }).click();
+  await page.getByLabel(/^Return quantity of Paracetamol 650/).fill("2");
+  await page.getByPlaceholder("e.g. Doctor changed the medicine").fill("Not needed");
+  await page.getByRole("button", { name: "Take back & refund" }).click();
+  await page.waitForURL(/\/pharmacy\/returns\/[0-9a-f-]+$/);
+  await expect(page.getByText(/^CN\/\d{4}\/\d{6} · Credit note$/)).toBeVisible();
+  await expect(page.getByText(/credited to the account/)).toBeVisible();
+  const note = await page.request.get(`${page.url()}/pdf`);
+  expect(note.headers()["content-type"]).toContain("application/pdf");
+
+  // The balance is collected.
+  await page.goto("/pharmacy/accounts");
+  await page.getByRole("link", { name: new RegExp(buyer) }).click();
+  await expect(page.getByText(/^Owes ₹/)).toBeVisible();
+  await page.getByRole("button", { name: "Receive payment" }).click();
+  await page.getByRole("dialog").getByLabel("Method").selectOption("upi");
+  await page.getByRole("dialog").getByRole("button", { name: "Receive" }).click();
+  await expect(page.getByText("Payment received")).toBeVisible();
+  await expect(page.getByText("Nothing owed")).toBeVisible();
+
+  // GST summary and GSTR-1, and an audited CSV.
+  await page.goto("/pharmacy/reports?view=gst");
+  await expect(page.getByRole("heading", { name: "Output tax by rate" })).toBeVisible();
+  const csv = await page.request.get("/pharmacy/reports/export?view=gst&section=output-rate");
+  expect(csv.status()).toBe(200);
+  expect(csv.headers()["content-type"]).toContain("text/csv");
+  expect(await csv.text()).toContain("GST %");
+  await page.getByRole("link", { name: "GSTR-1" }).click();
+  await expect(page.getByRole("heading", { name: "12 · HSN summary" })).toBeVisible();
+});
+
+test("Pharmacist sends stock back to the supplier, plans a reorder and prints shelf labels", async () => {
+  const page = pharmPage;
+  await page.goto("/pharmacy/purchases");
+  await page.getByRole("link", { name: "Return to supplier" }).click();
+  await page.getByLabel("Supplier").selectOption({ label: `Asha Distributors ${suffix}` });
+  await page.getByLabel(/^Units of /).first().fill("1");
+  await page.getByPlaceholder("e.g. Expired, damaged in transit").fill("Damaged");
+  await page.getByRole("button", { name: "Return & issue debit note" }).click();
+  await page.waitForURL(/\/pharmacy\/purchases\/returns\/[0-9a-f-]+$/);
+  await expect(page.getByText(/^DN\/\d{4}\/\d{6} · Debit note$/)).toBeVisible();
+
+  await page.goto("/pharmacy/reorder");
+  await expect(page.getByRole("heading", { name: "Reorder" })).toBeVisible();
+
+  await page.goto("/pharmacy/stock/labels");
+  await page.getByLabel(/^Label Paracetamol 650/).check();
+  const href = await page.getByRole("link", { name: "Labels PDF" }).getAttribute("href");
+  const labels = await page.request.get(href!);
+  expect(labels.headers()["content-type"]).toContain("application/pdf");
 });
 
 test("Auditor sees who opened a record, and cannot reach any patient screen", async () => {

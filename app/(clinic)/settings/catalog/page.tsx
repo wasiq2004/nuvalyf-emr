@@ -25,6 +25,7 @@ import { PRESET_KIND_LABELS } from "@/features/catalog/catalog-options";
 import { VITAL_FIELDS } from "@/features/clinical/vital-rules";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
+import { ScheduleBadge } from "@/components/pharmacy/badges";
 import { ReferenceMedicineDialog } from "@/components/pharmacy/reference-search";
 import { referenceSize } from "@/features/catalog/reference.service";
 import { packWord } from "@/features/pharmacy/selling-rules";
@@ -196,7 +197,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
                 cell: (d) => (
                   <div className={cn(!d.isActive && "opacity-60")}>
                     <p className="flex flex-wrap items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
-                      {d.name} <ItemTypeBadge type={d.itemType} /> <Inactive active={d.isActive} />
+                      {d.name} <ItemTypeBadge type={d.itemType} /> <ScheduleBadge schedule={d.schedule} /> <Inactive active={d.isActive} />
                     </p>
                     <p className="text-xs text-zinc-500">
                       {[d.itemType === "medicine" ? d.genericName : null, d.itemType === "medicine" ? d.form : null, d.strength, d.manufacturer].filter(Boolean).join(" · ") || "—"}
@@ -257,6 +258,11 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
                         defaultInstructions: d.defaultInstructions ?? "",
                         price: d.price ?? "",
                         packPrice: d.packPrice ?? "",
+                        hsn: d.hsn ?? "",
+                        gstRate: d.gstRate === null ? "" : String(Number(d.gstRate)),
+                        schedule: d.schedule,
+                        rack: d.rack ?? "",
+                        barcode: d.barcode ?? "",
                         allergyClassIds: d.classes.map((c) => c.id),
                         aliases: d.aliases.map((a) => ({ id: a.id, alias: a.alias })),
                       }}

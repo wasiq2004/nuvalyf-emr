@@ -15,6 +15,7 @@ import {
   prescriptionItems,
   prescriptionQueries,
   prescriptions,
+  saleReturns,
   stockBatches,
   users,
 } from "@/lib/db/schema";
@@ -28,6 +29,11 @@ import type { PaymentMethod } from "@/features/billing/billing-rules";
 import { moveStock } from "./stock.service";
 import { isExpired, suggestQuantity } from "./stock-rules";
 import { packWord, sellingPrice, unitsFor, type SoldAs } from "./selling-rules";
+import { priceSale, stateOfGstin, taxModeFor } from "./gst-rules";
+import { counterKey, documentNumber, fiscalYear } from "./numbering";
+import { missingDetails } from "./schedule-rules";
+import { effectiveGst, getPharmacySettings } from "./settings.service";
+import { customerBalance, ensurePatientCustomer, getCustomer, type CustomerRow } from "./customers.service";
 
 /** `quantity` counts units, or packs when `soldAs` is "pack" (default "unit"). */
 export type SaleLine = { drugId: string; batchId: string; quantity: number; soldAs?: SoldAs; prescriptionItemId?: string | null };
@@ -38,22 +44,34 @@ export type SaleInput = {
   patientId?: string | null;
   customerName?: string;
   customerPhone?: string;
-  method: PaymentMethod;
+  /** Named customer: required for credit, makes the sale B2B when it has a GSTIN. */
+  customerId?: string | null;
+  method: PaymentMethod | "credit";
   reference?: string;
+  /** Bill discount in rupees, tax-inclusive. */
+  discount?: string;
+  /** Schedule H / H1 / X details (filled from the prescription when dispensing). */
+  prescriberName?: string;
+  prescriberRegNo?: string;
+  patientAddress?: string;
   idempotencyKey: string;
 };
 
 export type SaleResult = { saleId: string; number: string; total: string; patientId: string | null; dispenseStatus: string | null };
 
-export async function sell(tx: Tx, clinicId: string, input: SaleInput, actorId: string, today: string) {
+/** What the caller may do beyond the counter defaults. */
+export type SaleAuthority = { overrideDiscountLimit: boolean };
+
+export async function sell(tx: Tx, clinicId: string, input: SaleInput, actorId: string, today: string, authority: SaleAuthority = { overrideDiscountLimit: false }) {
   const { idempotencyKey, ...request } = input;
   return idempotent(tx, { clinicId, name: input.prescriptionId ? "dispense" : "sale", key: idempotencyKey, input: request }, () =>
-    doSell(tx, clinicId, request, actorId, today),
+    doSell(tx, clinicId, request, actorId, today, authority),
   );
 }
 
-async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempotencyKey">, actorId: string, today: string): Promise<SaleResult> {
+async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempotencyKey">, actorId: string, today: string, authority: SaleAuthority): Promise<SaleResult> {
   if (input.lines.length === 0) throw new AppError("Add at least one medicine.");
+  const settings = await getPharmacySettings(tx, clinicId);
 
   const drugRows = await tx.select().from(drugs).where(inArray(drugs.id, [...new Set(input.lines.map((l) => l.drugId))]));
   // Units leaving stock per line: packs are converted at the item's pack size.
@@ -67,6 +85,12 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
 
   let patientId = input.patientId ?? null;
   let rxItems: (typeof prescriptionItems.$inferSelect)[] = [];
+  const details = {
+    prescriberName: input.prescriberName?.trim() || null,
+    prescriberRegNo: input.prescriberRegNo?.trim() || null,
+    patientName: input.customerName?.trim() || null,
+    patientAddress: input.patientAddress?.trim() || null,
+  };
   if (input.prescriptionId) {
     const [rx] = await tx.select().from(prescriptions).where(eq(prescriptions.id, input.prescriptionId)).for("update").limit(1);
     if (!rx || rx.status !== "signed") throw new AppError("Only a signed prescription can be dispensed.");
@@ -93,33 +117,74 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
         }
       }
     }
+    // The register details come from the signed prescription itself.
+    const snapshot = (rx.signedSnapshot ?? {}) as { prescriber?: { name?: string; registrationNumber?: string } };
+    const [patient] = await tx.select().from(patients).where(eq(patients.id, rx.patientId)).limit(1);
+    details.prescriberName = snapshot.prescriber?.name ?? details.prescriberName;
+    details.prescriberRegNo = snapshot.prescriber?.registrationNumber ?? details.prescriberRegNo;
+    details.patientName = patient ? displayPatientName(patient) : details.patientName;
+    details.patientAddress = patient ? [patient.addressLine, patient.city].filter(Boolean).join(", ") || details.patientAddress : details.patientAddress;
   }
+
+  // Scheduled drugs leave the counter only with the details the law asks for.
+  const missing = missingDetails(sized.map((s) => s.drug.schedule), details);
+  if (missing.length) throw new AppError(`This sale has scheduled medicines: enter the ${missing.join(", ")}.`);
+
+  // The buyer: credit needs a named customer; a GSTIN makes it B2B.
+  let customer: CustomerRow | null = null;
+  if (input.customerId) {
+    customer = await getCustomer(tx, input.customerId);
+    if (!customer || !customer.isActive) throw new AppError("Choose an active customer.");
+  } else if (input.method === "credit" && patientId) {
+    customer = await ensurePatientCustomer(tx, clinicId, patientId);
+  }
+  if (input.method === "credit" && !customer) throw new AppError("A credit sale needs a named customer.");
+  const mode = taxModeFor(settings.gstScheme, settings.stateCode, customer?.stateCode ?? stateOfGstin(customer?.gstin));
 
   // Lock every batch involved in a fixed order so two sales cannot deadlock.
   const batchIds = [...new Set(input.lines.map((l) => l.batchId))].sort();
   const batches = await tx.select().from(stockBatches).where(inArray(stockBatches.id, batchIds)).orderBy(asc(stockBatches.id)).for("update");
 
-  const priced = sized.map(({ line, drug, soldAs, units }) => {
+  const lines = sized.map(({ line, drug, soldAs, units }) => {
     const batch = batches.find((b) => b.id === line.batchId);
     if (!batch || batch.drugId !== drug.id) throw new AppError("A selected batch does not match its medicine.");
     if (isExpired(batch.expiryDate, today)) throw new AppError(`Batch ${batch.batchNo} of ${drug.name} has expired and cannot be sold.`);
     const price = sellingPrice(drug, soldAs);
     if (!price) throw new AppError(`${drug.name} has no selling price${soldAs === "pack" ? ` per ${packWord(drug.form)}` : ""}. Set one in Medicines & supplies first.`);
     const each = toMinor(price);
-    return { line, batch, drug, soldAs, units, each, amount: each * line.quantity };
+    return { line, batch, drug, soldAs, units, each, gross: each * line.quantity, ...effectiveGst(drug, settings) };
   });
 
   // The same batch may appear on two lines: check the combined quantity.
   for (const batch of batches) {
-    const wanted = priced.filter((p) => p.batch.id === batch.id).reduce((n, p) => n + p.units, 0);
+    const wanted = lines.filter((p) => p.batch.id === batch.id).reduce((n, p) => n + p.units, 0);
     if (wanted > batch.quantity) {
       const drug = drugRows.find((d) => d.id === batch.drugId);
       throw new AppError(`Only ${batch.quantity} of ${drug?.name ?? "that medicine"} left in batch ${batch.batchNo}.`);
     }
   }
 
-  const total = priced.reduce((sum, p) => sum + p.amount, 0);
-  const number = `S-${String(await nextCounter(tx, clinicId, "sale")).padStart(6, "0")}`;
+  const gross = lines.reduce((s, l) => s + l.gross, 0);
+  const discount = toMinor(input.discount || "0");
+  if (discount > gross) throw new AppError("The discount is more than the bill.");
+  if (!authority.overrideDiscountLimit && discount * 100 > gross * settings.maxDiscountPercent) {
+    throw new AppError(`Discounts above ${settings.maxDiscountPercent} % need a manager.`);
+  }
+  const priced = priceSale(
+    lines.map((l) => ({ gross: l.gross, gstRate: l.gstRate })),
+    { discount, roundOff: settings.roundOff, mode },
+  );
+
+  if (input.method === "credit" && customer?.creditLimit) {
+    const owed = await customerBalance(tx, customer.id);
+    if (owed + priced.total > toMinor(customer.creditLimit)) {
+      throw new AppError(`${customer.name} would owe ${fromMinor(owed + priced.total)}, above their credit limit of ${customer.creditLimit}.`);
+    }
+  }
+
+  // The invoice number is taken last: the counter row stays locked until commit.
+  const fy = fiscalYear(today);
+  const number = documentNumber("sale", fy, await nextCounter(tx, clinicId, counterKey("sale", fy)));
   const [sale] = await tx
     .insert(pharmacySales)
     .values({
@@ -127,9 +192,20 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
       number,
       patientId,
       prescriptionId: input.prescriptionId ?? null,
-      customerName: input.customerName ?? null,
-      customerPhone: input.customerPhone ?? null,
-      total: fromMinor(total),
+      customerName: details.patientName ?? customer?.name ?? null,
+      customerPhone: input.customerPhone || customer?.phone || null,
+      customerId: customer?.id ?? null,
+      customerGstin: customer?.gstin ?? null,
+      fiscalYear: fy,
+      documentType: settings.gstScheme === "regular" ? "tax_invoice" : "bill_of_supply",
+      interState: mode === "inter",
+      discount: fromMinor(priced.discount),
+      roundOff: fromMinor(priced.roundOff),
+      taxTotal: fromMinor(priced.tax),
+      prescriberName: details.prescriberName,
+      prescriberRegNo: details.prescriberRegNo,
+      patientAddress: details.patientAddress,
+      total: fromMinor(priced.total),
       method: input.method,
       reference: input.reference ?? null,
       soldBy: actorId,
@@ -137,24 +213,36 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     .returning({ id: pharmacySales.id });
 
   await tx.insert(pharmacySaleItems).values(
-    priced.map((p) => ({
-      clinicId,
-      saleId: sale.id,
-      drugId: p.drug.id,
-      batchId: p.batch.id,
-      prescriptionItemId: p.line.prescriptionItemId ?? null,
-      description: [p.drug.name, p.drug.strength].filter(Boolean).join(" "),
-      batchNo: p.batch.batchNo,
-      expiryDate: p.batch.expiryDate,
-      quantity: p.units,
-      soldAs: p.soldAs,
-      packSize: p.soldAs === "pack" ? p.drug.packSize : 1,
-      packs: p.soldAs === "pack" ? p.line.quantity : null,
-      unitPrice: fromMinor(p.each),
-      amount: fromMinor(p.amount),
-    })),
+    lines.map((p, i) => {
+      const t = priced.lines[i];
+      return {
+        clinicId,
+        saleId: sale.id,
+        drugId: p.drug.id,
+        batchId: p.batch.id,
+        prescriptionItemId: p.line.prescriptionItemId ?? null,
+        description: [p.drug.name, p.drug.strength].filter(Boolean).join(" "),
+        batchNo: p.batch.batchNo,
+        expiryDate: p.batch.expiryDate,
+        quantity: p.units,
+        soldAs: p.soldAs,
+        packSize: p.soldAs === "pack" ? p.drug.packSize : 1,
+        packs: p.soldAs === "pack" ? p.line.quantity : null,
+        unitPrice: fromMinor(p.each),
+        amount: fromMinor(t.gross),
+        discount: fromMinor(t.discount),
+        hsn: p.hsn,
+        gstRate: String(t.gstRate),
+        taxable: fromMinor(t.taxable),
+        cgst: fromMinor(t.cgst),
+        sgst: fromMinor(t.sgst),
+        igst: fromMinor(t.igst),
+        schedule: p.drug.schedule,
+        unitCost: p.batch.unitCost,
+      };
+    }),
   );
-  for (const p of priced) {
+  for (const p of lines) {
     await moveStock(
       tx,
       clinicId,
@@ -167,24 +255,27 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
   if (input.prescriptionId) {
     dispenseStatus = await refreshDispenseStatus(tx, input.prescriptionId, rxItems);
   }
-  return { saleId: sale.id, number, total: fromMinor(total), patientId, dispenseStatus };
+  return { saleId: sale.id, number, total: fromMinor(priced.total), patientId, dispenseStatus };
 }
 
-/** Dispensed when every line has had its full quantity; otherwise partial. */
-async function refreshDispenseStatus(tx: Tx, prescriptionId: string, items: (typeof prescriptionItems.$inferSelect)[]) {
+/** Dispensed when every line has had its full quantity; partial if some; pending if none (after returns). */
+export async function refreshDispenseStatus(tx: Tx, prescriptionId: string, items?: (typeof prescriptionItems.$inferSelect)[]) {
+  const rxItems = items ?? (await tx.select().from(prescriptionItems).where(eq(prescriptionItems.prescriptionId, prescriptionId)));
   const given = await dispensedQuantities(tx, prescriptionId);
-  const complete = items.every((item) => {
-    const needed = suggestQuantity(item) ?? 1;
-    return (given.get(item.id) ?? 0) >= needed;
-  });
-  const status = complete ? "dispensed" : "partial";
+  const complete = rxItems.every((item) => (given.get(item.id) ?? 0) >= (suggestQuantity(item) ?? 1));
+  const any = [...given.values()].some((n) => n > 0);
+  const status = complete ? "dispensed" : any ? "partial" : "pending";
   await tx.update(prescriptions).set({ dispenseStatus: status, updatedAt: new Date() }).where(eq(prescriptions.id, prescriptionId));
   return status;
 }
 
+/** Units given per prescription line: sold minus returned. */
 async function dispensedQuantities(tx: Tx, prescriptionId: string) {
   const rows = await tx
-    .select({ itemId: pharmacySaleItems.prescriptionItemId, qty: sql<number>`sum(${pharmacySaleItems.quantity})::int` })
+    .select({
+      itemId: pharmacySaleItems.prescriptionItemId,
+      qty: sql<number>`(sum(${pharmacySaleItems.quantity}) - coalesce(sum((select sum(ri.quantity) from app.sale_return_items ri where ri.sale_item_id = ${pharmacySaleItems.id})), 0))::int`,
+    })
     .from(pharmacySaleItems)
     .innerJoin(pharmacySales, eq(pharmacySales.id, pharmacySaleItems.saleId))
     .where(eq(pharmacySales.prescriptionId, prescriptionId))
@@ -322,6 +413,8 @@ export async function getPrescriptionForDispensing(tx: Tx, prescriptionId: strin
             price: o.drug.price,
             packPrice: o.drug.packPrice,
             packSize: o.drug.packSize,
+            gstRate: o.drug.gstRate,
+            rack: o.drug.rack,
             batchId: o.batch.id,
             batchNo: o.batch.batchNo,
             expiryDate: o.batch.expiryDate,
@@ -346,12 +439,19 @@ export async function salesBetween(tx: Tx, from: Date, to: Date) {
     .orderBy(desc(pharmacySales.soldAt));
 }
 
+/** Billed in the window, credit notes issued in it, and the net of the two. */
 export async function salesTotal(tx: Tx, from: Date, to: Date) {
   const [row] = await tx
     .select({ total: sql<string>`coalesce(sum(${pharmacySales.total}), 0)::numeric(12,2)::text`, count: sql<number>`count(*)::int` })
     .from(pharmacySales)
     .where(and(gte(pharmacySales.soldAt, from), lt(pharmacySales.soldAt, to)));
-  return { total: row?.total ?? "0.00", count: row?.count ?? 0 };
+  const [back] = await tx
+    .select({ total: sql<string>`coalesce(sum(${saleReturns.total}), 0)::numeric(12,2)::text` })
+    .from(saleReturns)
+    .where(and(gte(saleReturns.createdAt, from), lt(saleReturns.createdAt, to)));
+  const billed = row?.total ?? "0.00";
+  const returned = back?.total ?? "0.00";
+  return { billed, returned, total: fromMinor(toMinor(billed) - toMinor(returned)), count: row?.count ?? 0 };
 }
 
 export async function getSale(tx: Tx, saleId: string) {
@@ -389,7 +489,7 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
     .where(
       and(
         eq(drugs.isActive, true),
-        sql`(${drugs.name} ilike ${`%${term}%`} or ${drugs.genericName} ilike ${`%${term}%`} or exists (select 1 from app.drug_aliases a where a.drug_id = ${drugs.id} and a.alias ilike ${`%${term}%`}))`,
+        sql`(${drugs.barcode} = ${query.trim()} or ${drugs.name} ilike ${`%${term}%`} or ${drugs.genericName} ilike ${`%${term}%`} or exists (select 1 from app.drug_aliases a where a.drug_id = ${drugs.id} and a.alias ilike ${`%${term}%`}))`,
         sql`${stockBatches.quantity} > 0`,
         sql`${stockBatches.expiryDate} >= ${today}`,
       ),
@@ -407,6 +507,13 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
       price: string | null;
       packPrice: string | null;
       packSize: number;
+      hsn: string | null;
+      gstRate: string | null;
+      itemType: string;
+      schedule: string;
+      rack: string | null;
+      /** The search was an exact scan of this item's barcode. */
+      barcodeMatch: boolean;
       batches: { id: string; batchNo: string; expiryDate: string; quantity: number }[];
     }
   >();
@@ -420,6 +527,12 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
       price: r.drug.price,
       packPrice: r.drug.packPrice,
       packSize: r.drug.packSize,
+      hsn: r.drug.hsn,
+      gstRate: r.drug.gstRate,
+      itemType: r.drug.itemType,
+      schedule: r.drug.schedule,
+      rack: r.drug.rack,
+      barcodeMatch: Boolean(r.drug.barcode) && r.drug.barcode === query.trim(),
       batches: [],
     };
     entry.batches.push({ id: r.batch.id, batchNo: r.batch.batchNo, expiryDate: r.batch.expiryDate, quantity: r.batch.quantity });
