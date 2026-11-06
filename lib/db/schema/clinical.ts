@@ -7,6 +7,7 @@
 import {
   boolean,
   check,
+  customType,
   foreignKey,
   index,
   integer,
@@ -297,7 +298,7 @@ export const labResults = appSchema.table(
     section: varchar("section", { length: 80 }),
     unit: varchar("unit", { length: 40 }),
     sortOrder: integer("sort_order").notNull().default(0),
-    value: varchar("value", { length: 200 }).notNull(),
+    value: varchar("value", { length: 500 }).notNull(),
     /** The value as a number, for trends; null for words. */
     valueNumber: numeric("value_number", { precision: 14, scale: 4 }),
     flag: varchar("flag", { length: 15 }).notNull().default("normal"),
@@ -311,6 +312,58 @@ export const labResults = appSchema.table(
     foreignKey({ name: "lab_results_order_fk", columns: [t.clinicId, t.orderId], foreignColumns: [labOrders.clinicId, labOrders.id] }),
     index("lab_results_order_idx").on(t.orderId),
     index("lab_results_patient_idx").on(t.clinicId, t.patientId, t.parameterId),
-    check("lab_results_flag_check", sql`${t.flag} IN ('normal', 'low', 'high', 'critical_low', 'critical_high', 'abnormal')`),
+    check("lab_results_flag_check", sql`${t.flag} IN ('normal', 'low', 'high', 'critical_low', 'critical_high', 'abnormal', 'critical')`),
   ],
+);
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
+
+/**
+ * A file attached to a lab test. Never deleted or edited: a wrong file is
+ * removed from view with a reason, and the record of it stays.
+ */
+export const labDocuments = appSchema.table(
+  "lab_documents",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    orderId: uuid("order_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    fileName: varchar("file_name", { length: 200 }).notNull(),
+    /** Worked out from the file's first bytes, not from what the browser said. */
+    contentType: varchar("content_type", { length: 40 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: varchar("sha256", { length: 64 }).notNull(),
+    uploadedBy: uuid("uploaded_by").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+    removedBy: uuid("removed_by"),
+    removedReason: text("removed_reason"),
+  },
+  (t) => [
+    unique("lab_documents_clinic_id_id_key").on(t.clinicId, t.id),
+    foreignKey({ name: "lab_documents_order_fk", columns: [t.clinicId, t.orderId], foreignColumns: [labOrders.clinicId, labOrders.id] }),
+    foreignKey({ name: "lab_documents_patient_fk", columns: [t.clinicId, t.patientId], foreignColumns: [patients.clinicId, patients.id] }),
+    index("lab_documents_order_idx").on(t.clinicId, t.orderId),
+    index("lab_documents_patient_idx").on(t.clinicId, t.patientId, t.uploadedAt),
+    // The same file twice on a test is a double-click, not a second document.
+    uniqueIndex("lab_documents_same_file_idx").on(t.orderId, t.sha256).where(sql`${t.removedAt} IS NULL`),
+    check("lab_documents_type_check", sql`${t.contentType} IN ('application/pdf', 'image/jpeg', 'image/png')`),
+    check("lab_documents_size_check", sql`${t.sizeBytes} > 0`),
+    check("lab_documents_removed_check", sql`(${t.removedAt} IS NULL) = (${t.removedBy} IS NULL) AND (${t.removedAt} IS NULL) = (${t.removedReason} IS NULL)`),
+  ],
+);
+
+/**
+ * The file itself, kept apart so that listing documents never reads the bytes.
+ * Storage is this one table: moving to object storage later touches nothing else.
+ */
+export const labDocumentFiles = appSchema.table(
+  "lab_document_files",
+  {
+    documentId: uuid("document_id").primaryKey(),
+    clinicId: clinicId(),
+    content: bytea("content").notNull(),
+  },
+  (t) => [foreignKey({ name: "lab_document_files_document_fk", columns: [t.clinicId, t.documentId], foreignColumns: [labDocuments.clinicId, labDocuments.id] })],
 );

@@ -2,6 +2,7 @@
 // and the clinic-owned catalogues.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
+import { PDFDocument } from "pdf-lib";
 import { ownerSql } from "./test-db";
 import { createTestClinic } from "./fixtures";
 import { withClinic } from "@/lib/db";
@@ -32,8 +33,10 @@ import { frequentDiagnoses, frequentMedicines, lastPrescription, medicinesForDia
 import { addAllergy, correctAllergy, listAllergyHistory, recordNoKnownAllergies } from "@/features/clinical/allergies.service";
 import { addDiagnosis, searchDiagnosisCodes } from "@/features/clinical/diagnoses.service";
 import { addPrescriptionItem, getDraftPrescription, getSignedPrescription, searchDrugs, warningsFor } from "@/features/clinical/prescriptions.service";
-import { enterParameterResults, enterResult, entryFieldsFor, labReport, listLabTestOptions, listUnreadResults, markResultRead, orderLab, patientLabHistory } from "@/features/clinical/lab.service";
+import { cancelLabOrder, entryFieldsFor, labOrderDetail, labReport, listLabTestOptions, listUnreadResults, markResultRead, orderLab, patientLabHistory, saveLabResult } from "@/features/clinical/lab.service";
+import { addLabDocument, labDocumentContents, labDocumentForViewing, listOrderDocuments, listPatientDocuments, removeLabDocument } from "@/features/clinical/lab-documents.service";
 import { renderLabReportPdf } from "@/lib/pdf/lab-report-pdf";
+import { appendDocuments } from "@/lib/pdf/attachments";
 import { createDrug, deleteLabRange, getLabTestWithParameters, saveLabParameter, saveLabRange, saveVitalRange, setEntryActive } from "@/features/catalog/catalog.service";
 import { todayInTimeZone } from "@/lib/time";
 
@@ -451,8 +454,9 @@ describe("lab", () => {
     const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, hb.id, "Fasting not needed", doctorId));
     await expect(asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, hb.id, undefined, doctorId))).rejects.toThrow(/already ordered/);
 
-    await asAdmin()((tx) => enterResult(tx, order.id, { value: "9.1", flag: "abnormal" }, adminId));
-    await expect(asAdmin()((tx) => enterResult(tx, order.id, { value: "12", flag: "normal" }, adminId))).rejects.toThrow(AppError);
+    const hbField = (await asAdmin()((tx) => entryFieldsFor(tx, [{ id: order.id, testId: hb.id, patientSex: "unknown", patientAge: 30 }]))).get(order.id)![0];
+    await asAdmin()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hbField.id, value: "9.1" }] }, adminId, today));
+    await expect(asAdmin()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hbField.id, value: "12" }] }, adminId, today))).rejects.toThrow(AppError);
     await expectLocked(asAdmin()((tx) => tx.execute(sql`update app.lab_orders set result_value = '12' where id = ${order.id}`)));
 
     const unread = await asDoctor()((tx) => listUnreadResults(tx, doctorId, today));
@@ -497,11 +501,11 @@ describe("lab tests with their own parameters", () => {
     const plt = fields.find((f) => f.name === "Platelet count")!;
     expect(hb.reference).toBe("12 - 15"); // the female range, not the male one
 
-    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "11 g/dL" }] }, labId, today))).rejects.toThrow(/enter a number/);
-    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: " " }] }, labId, today))).rejects.toThrow(/at least one/);
+    await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "11 g/dL" }] }, labId, today))).rejects.toThrow(/enter a number/);
+    await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: " " }] }, labId, today))).rejects.toThrow(/at least one/);
 
     const result = await asLab()((tx) =>
-      enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "6.5" }, { parameterId: plt.id, value: "250000" }], notes: "Repeat sample" }, labId, today),
+      saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "6.5" }, { parameterId: plt.id, value: "250000" }], notes: "Repeat sample" }, labId, today),
     );
     expect(result).toMatchObject({ flag: "critical", parameters: 2 });
     const rows = await owner`select name, value, flag, reference_text from app.lab_results where order_id = ${order.id} order by sort_order`;
@@ -514,7 +518,7 @@ describe("lab tests with their own parameters", () => {
     expect(unread.resultValue).toContain("Haemoglobin 6.5 g/dL (LL)");
 
     // Saved results are permanent, and a later change to a range leaves them alone.
-    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "9" }] }, labId, today))).rejects.toThrow(/already been resulted/);
+    await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "9" }] }, labId, today))).rejects.toThrow(/already been resulted/);
     await expect(owner`update app.lab_results set value = '99' where order_id = ${order.id}`).rejects.toThrow(/append-only/);
     await owner`update app.lab_parameter_ranges set low = 1 where parameter_id = ${hb.id}`;
     const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
@@ -530,14 +534,195 @@ describe("lab tests with their own parameters", () => {
     expect(history.tests[0].rows.map((r) => r.name)).toContain("Haemoglobin");
   });
 
-  it("keeps the single free-text result for tests with no parameters", async () => {
+  it("a test with no parameter list takes whatever the technician adds", async () => {
     const [custom] = await asAdmin()((tx) => tx.insert(labTests).values({ clinicId: clinic.clinicId, name: "Custom culture" }).returning({ id: labTests.id }));
     const { encounterId } = await female("Radha");
     const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, custom.id, undefined, doctorId));
     expect(await fieldsOf(order.id, "female", 34, custom.id)).toEqual([]);
-    await asLab()((tx) => enterResult(tx, order.id, { value: "No growth", flag: "normal" }, labId));
+    await asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [], added: [{ name: "Custom culture", value: "No growth after 48 hours" }] }, labId, today));
     const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
-    expect(report.tests[0].single?.value).toBe("No growth");
+    expect(report.tests[0].lines[0]).toMatchObject({ name: "Custom culture", value: "No growth after 48 hours", section: null, parameterId: null });
+    expect(report.tests[0].single).toBeNull();
+  });
+
+  it("parameters added on the spot sit with the test's own, flag themselves, print and trend", async () => {
+    const testId = await cbc();
+    const { encounterId } = await female("Added");
+    const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, testId, undefined, doctorId));
+    const fields = await fieldsOf(order.id, "female", 34, testId);
+    const hb = fields.find((f) => f.name.startsWith("Haemoglobin"))!;
+
+    await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "13" }], added: [{ name: hb.name.toUpperCase(), value: "13" }] }, labId, today))).rejects.toThrow(/already on this test/);
+    await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [], added: [{ name: "Reticulocytes", value: "1" }, { name: "reticulocytes", value: "2" }] }, labId, today))).rejects.toThrow(/already on this test/);
+
+    await asLab()((tx) =>
+      saveLabResult(
+        tx,
+        clinic.clinicId,
+        order.id,
+        {
+          values: [{ parameterId: hb.id, value: "13" }],
+          added: [
+            // Outside the range typed, so it cannot be saved as normal.
+            { name: "Reticulocytes", value: "9", unit: "%", reference: "0.5 - 2.5", flag: "normal" },
+            { name: "Malaria parasite", value: "Seen", flag: "critical" },
+            { name: "Sample appearance", value: "Clear" },
+          ],
+        },
+        labId,
+        today,
+      ),
+    );
+    const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
+    const lines = report.tests[0].lines;
+    expect(lines.map((l) => [l.name, l.section, l.flag])).toEqual([
+      [hb.name, hb.section, "normal"],
+      ["Reticulocytes", "Additional", "high"],
+      ["Malaria parasite", "Additional", "critical"],
+      ["Sample appearance", "Additional", "normal"],
+    ]);
+    expect(lines[1]).toMatchObject({ refLow: "0.5000", refHigh: "2.5000", referenceText: "0.5 - 2.5", valueNumber: "9.0000" });
+    expect((await asDoctor()((tx) => listUnreadResults(tx, doctorId, today))).find((u) => u.id === order.id)?.resultFlag).toBe("critical");
+  });
+
+  it("opening a starter test fills in its parameters, without undoing what the clinic chose", async () => {
+    // As in a clinic set up before parameters existed, where nobody pressed Import.
+    const [test] = await owner`select id from app.lab_tests where clinic_id = ${clinic.clinicId} and starter_key = 'lipid'`;
+    await owner`delete from app.lab_test_parameters where test_id = ${test.id}`;
+    const { encounterId } = await female("Starter");
+    const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, test.id, undefined, doctorId));
+    const opened = (await asLab()((tx) => labOrderDetail(tx, clinic.clinicId, order.id, today)))!;
+    expect(opened.fields.length).toBeGreaterThan(3);
+
+    // Turned off by the clinic: stays off, even though the starter list has them.
+    await owner`update app.lab_test_parameters set is_active = false where test_id = ${test.id}`;
+    expect((await asLab()((tx) => labOrderDetail(tx, clinic.clinicId, order.id, today)))!.fields).toEqual([]);
+  });
+
+  describe("documents", () => {
+    const pdf = (text = "report") => Buffer.from(`%PDF-1.4 ${text}`);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const newOrder = async (name: string) => {
+      const testId = await cbc();
+      const { encounterId, patientId } = await female(name);
+      const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, testId, undefined, doctorId));
+      return { order, encounterId, patientId, testId };
+    };
+    const attach = (orderId: string, name: string, bytes: Buffer) => asLab()((tx) => addLabDocument(tx, clinic.clinicId, orderId, { name, bytes }, labId));
+
+    it("takes the type from the content, the patient from the order, and refuses the rest", async () => {
+      const { order, patientId } = await newOrder("Docs");
+      await expect(attach(order.id, "report.pdf", Buffer.from("<script>alert(1)</script>"))).rejects.toThrow(/PDF, JPG or PNG/);
+      await expect(attach(order.id, "empty.pdf", Buffer.alloc(0))).rejects.toThrow(/empty/);
+      await expect(attach(order.id, "big.pdf", Buffer.concat([pdf(), Buffer.alloc(10 * 1024 * 1024)]))).rejects.toThrow(/10 MB/);
+
+      const row = await attach(order.id, "../../scan\\C:\\photo.exe", png);
+      const [document] = await asLab()((tx) => listOrderDocuments(tx, order.id));
+      expect(document).toMatchObject({ id: row.id, contentType: "image/png", fileName: "photo.exe.png", sizeBytes: png.length, uploadedByName: expect.any(String) });
+      expect(row.patientId).toBe(patientId);
+
+      await expect(attach(order.id, "again.png", png)).rejects.toThrow(/already attached/);
+      const opened = await asDoctor()((tx) => labDocumentForViewing(tx, row.id));
+      expect(Buffer.compare(opened!.content, png)).toBe(0);
+      expect((await asDoctor()((tx) => listPatientDocuments(tx, patientId))).map((d) => d.testName)).toEqual([order.testName]);
+    });
+
+    it("prints with the report: a PDF keeps its pages, a photo gets one, a bad file never stops the print", async () => {
+      const blank = await PDFDocument.create();
+      blank.addPage([300, 300]);
+      blank.addPage([300, 300]);
+      const twoPages = Buffer.from(await blank.save());
+      const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+
+      const { order, encounterId, testId } = await newOrder("Printed");
+      const [field] = await fieldsOf(order.id, "female", 34, testId);
+      await attach(order.id, "machine-printout.pdf", twoPages);
+      await attach(order.id, "smear.png", image);
+      await attach(order.id, "corrupt.pdf", pdf("not really a pdf"));
+      await asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: field.id, value: "13" }], added: [{ name: "A long note from the technician", value: "x ".repeat(120).trim() }] }, labId, today));
+
+      const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
+      const letterhead = { name: "Test", addressLine: null, city: null, phone: null, email: null, letterheadText: null, footerText: null };
+      const base = await renderLabReportPdf(report, letterhead, "Asia/Kolkata");
+      const basePages = (await PDFDocument.load(base)).getPageCount();
+
+      const documents = report.tests.flatMap((t) => t.documents);
+      expect(documents.map((d) => d.name)).toEqual(["machine-printout.pdf", "smear.png", "corrupt.pdf"]);
+      const contents = await asDoctor()((tx) => labDocumentContents(tx, documents.map((d) => d.id)));
+      const full = await appendDocuments(base, documents.map((d) => ({ name: d.name, contentType: d.contentType, content: contents.get(d.id) ?? null })), "Printed MRN1");
+      // Two from the PDF, one for the photo, one saying the corrupt file could not print.
+      expect((await PDFDocument.load(full)).getPageCount()).toBe(basePages + 4);
+    });
+
+    it("limits a test to ten documents and stops at a cancelled test", async () => {
+      const { order } = await newOrder("Many");
+      for (let i = 0; i < 10; i++) await attach(order.id, `${i}.pdf`, pdf(String(i)));
+      await expect(attach(order.id, "11.pdf", pdf("11"))).rejects.toThrow(/up to 10/);
+
+      const other = await newOrder("Cancelled");
+      await asDoctor()((tx) => cancelLabOrder(tx, other.order.id, doctorId));
+      await expect(attach(other.order.id, "late.pdf", pdf())).rejects.toThrow(/cancelled/);
+    });
+
+    it("cannot be reached from another clinic", async () => {
+      const { order } = await newOrder("Isolated");
+      const row = await attach(order.id, "secret.pdf", pdf("secret"));
+      const outsider = await createTestClinic("outsider");
+      const stranger = "00000000-0000-4000-8000-000000000001";
+      const asOutsider = <T,>(fn: Parameters<typeof withClinic<T>>[1]) => withClinic({ clinicId: outsider.clinicId, userId: stranger }, fn);
+      expect(await asOutsider((tx) => labDocumentForViewing(tx, row.id))).toBeNull();
+      expect((await asOutsider((tx) => labDocumentContents(tx, [row.id]))).size).toBe(0);
+      await expect(asOutsider((tx) => addLabDocument(tx, outsider.clinicId, order.id, { name: "x.pdf", bytes: pdf() }, stranger))).rejects.toThrow(/not found/);
+    });
+
+    it("a result can be just the document, and needs an interpretation", async () => {
+      const { order, encounterId } = await newOrder("Only");
+      await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [], documentFlag: "normal" }, labId, today))).rejects.toThrow(/attach the report/);
+      const row = await attach(order.id, "outside-lab.pdf", pdf("outside"));
+      await expect(asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [] }, labId, today))).rejects.toThrow(/interpretation/);
+      await asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [], documentFlag: "abnormal" }, labId, today));
+
+      const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
+      expect(report.tests[0].single).toMatchObject({ value: "See attached document", flag: "abnormal" });
+      expect(report.tests[0].documents.map((d) => d.name)).toEqual(["outside-lab.pdf"]);
+
+      // The result lives in that file, so it cannot be taken away on its own.
+      await expect(asLab()((tx) => removeLabDocument(tx, row.id, "Wrong file", labId))).rejects.toThrow(/Upload the correct one first/);
+      await attach(order.id, "right.pdf", pdf("right"));
+      await asLab()((tx) => removeLabDocument(tx, row.id, "Wrong file", labId));
+    });
+
+    it("a document added after the doctor read the result comes back as unread", async () => {
+      const { order, testId } = await newOrder("Late");
+      const [field] = await fieldsOf(order.id, "female", 34, testId);
+      await asLab()((tx) => saveLabResult(tx, clinic.clinicId, order.id, { values: [{ parameterId: field.id, value: "13" }] }, labId, today));
+      await asDoctor()((tx) => markResultRead(tx, order.id, doctorId));
+      expect((await asDoctor()((tx) => listUnreadResults(tx, doctorId, today))).map((u) => u.id)).not.toContain(order.id);
+
+      await attach(order.id, "late.pdf", pdf("late"));
+      const unread = (await asDoctor()((tx) => listUnreadResults(tx, doctorId, today))).find((u) => u.id === order.id);
+      expect(unread?.documents).toBe(1);
+    });
+
+    it("removing keeps the record, hides the file, needs no second removal, and the file itself is locked", async () => {
+      const { order, patientId } = await newOrder("Removed");
+      const row = await attach(order.id, "wrong-patient.pdf", pdf("wrong"));
+      await asLab()((tx) => removeLabDocument(tx, row.id, "Wrong patient", labId));
+      await expect(asLab()((tx) => removeLabDocument(tx, row.id, "Again", labId))).rejects.toThrow(/not on this test/);
+
+      expect(await asDoctor()((tx) => labDocumentForViewing(tx, row.id))).toBeNull();
+      expect(await asDoctor()((tx) => listPatientDocuments(tx, patientId))).toEqual([]);
+      expect((await asLab()((tx) => listOrderDocuments(tx, order.id)))[0]).toMatchObject({ removedReason: "Wrong patient", removedByName: expect.any(String) });
+
+      // The same file may go back on once the wrong copy is gone.
+      await attach(order.id, "right-this-time.pdf", pdf("wrong"));
+
+      await expectLocked(asAdmin()((tx) => tx.execute(sql`update app.lab_documents set removed_at = null, removed_by = null, removed_reason = null where id = ${row.id}`)));
+      await expectLocked(asAdmin()((tx) => tx.execute(sql`update app.lab_documents set file_name = 'x.pdf' where id = ${row.id}`)));
+      await expectLocked(asAdmin()((tx) => tx.execute(sql`delete from app.lab_documents where id = ${row.id}`)));
+      await expect(asAdmin()((tx) => tx.execute(sql`update app.lab_document_files set content = '\\x00' where document_id = ${row.id}`))).rejects.toThrow();
+      await expect(asAdmin()((tx) => tx.execute(sql`delete from app.lab_document_files where document_id = ${row.id}`))).rejects.toThrow();
+    });
   });
 
   it("the clinic can change a test's parameters and ranges", async () => {

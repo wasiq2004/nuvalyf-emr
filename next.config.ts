@@ -15,9 +15,12 @@ const nextConfig: NextConfig = {
     // forbidden() / unauthorized() for real 403 responses on refused pages.
     authInterrupts: true,
     serverActions: {
-      // Patient register imports send the CSV (max 2 MB, features/import) as text.
-      bodySizeLimit: "3mb",
+      // Lab documents: 10 MB a file, sent one at a time, plus the form around it.
+      // Patient register imports send their CSV (max 2 MB) the same way.
+      bodySizeLimit: "11mb",
     },
+    // proxy.ts buffers each request body; past this limit it is cut short.
+    proxyClientMaxBodySize: "11mb",
   },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];

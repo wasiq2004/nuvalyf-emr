@@ -5,6 +5,8 @@ import { openAdmissionFor } from "@/features/inpatient/inpatient.service";
 import { z } from "zod";
 import { ButtonLink } from "@/components/app/buttons";
 import { DetailList, EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
+import { LabDocumentLinks } from "@/components/clinical/lab-document-links";
+import { listPatientDocuments } from "@/features/clinical/lab-documents.service";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
 import { can, hasModule, requireClinic } from "@/lib/auth/clinic-session";
@@ -71,6 +73,7 @@ export default async function PatientPage({ params }: { params: Promise<{ id: st
           allergies: await listAllergies(tx, id),
           classes: await listAllergyClassOptions(tx),
           encounters: await listPatientEncounters(tx, id),
+          labDocuments: hasModule(ctx, "lab") ? await listPatientDocuments(tx, id) : [],
         }
       : null;
     const billing = can(ctx, "billing:read")
@@ -245,6 +248,12 @@ export default async function PatientPage({ params }: { params: Promise<{ id: st
           >
             <AllergyList allergies={data.clinical.allergies} canWrite={can(ctx, "allergy:write")} timezone={ctx.timezone} />
           </Panel>
+
+          {data.clinical.labDocuments.length > 0 && (
+            <Panel title="Lab documents" description="Reports and images attached by the lab. Opening one is recorded in the audit trail.">
+              <LabDocumentLinks documents={data.clinical.labDocuments} timezone={ctx.timezone} />
+            </Panel>
+          )}
 
           <Panel flush title="Consultations" description="Every view of a consultation is recorded in the audit trail.">
             <DataTable

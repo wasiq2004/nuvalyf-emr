@@ -1,6 +1,6 @@
 // The clinical home screens: the doctor's worklist and the nurse's triage
 // list. Server components built on the shared queue board.
-import { CheckCircle2, FlaskConical, HeartPulse, ListOrdered, Stethoscope, Timer, Users } from "lucide-react";
+import { CheckCircle2, FlaskConical, HeartPulse, ListOrdered, Paperclip, Stethoscope, Timer, Users } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { EmptyState, Panel, StatCard } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -160,6 +160,11 @@ export function DoctorDay({
                       {r.unit ? ` ${r.unit}` : ""}
                       {r.referenceRange ? <span className="text-zinc-500"> (ref {r.referenceRange})</span> : null}
                     </p>
+                    {r.documents > 0 && (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                        <Paperclip className="h-3.5 w-3.5" aria-hidden /> {r.documents === 1 ? "1 document attached" : `${r.documents} documents attached`}
+                      </p>
+                    )}
                     <div className="mt-2 flex items-center justify-between gap-2">
                       <OpenButton encounterId={r.encounterId} label="Open consultation" />
                       <MarkReadButton id={r.id} />

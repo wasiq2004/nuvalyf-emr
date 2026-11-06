@@ -276,6 +276,27 @@ BEGIN
   RETURN NEW;
 END $$;
 
+-- A lab document is never deleted or edited. The one change allowed is removing
+-- it from view, once, with a reason; the stored file cannot change at all.
+CREATE OR REPLACE FUNCTION app.guard_lab_document() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'Lab documents cannot be deleted' USING ERRCODE = 'MFL01';
+  END IF;
+  IF OLD.removed_at IS NOT NULL OR
+     (to_jsonb(NEW) - 'removed_at' - 'removed_by' - 'removed_reason') IS DISTINCT FROM
+     (to_jsonb(OLD) - 'removed_at' - 'removed_by' - 'removed_reason') THEN
+    RAISE EXCEPTION 'Lab document % cannot be changed', OLD.id USING ERRCODE = 'MFL01';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS lab_documents_guard ON app.lab_documents;
+CREATE TRIGGER lab_documents_guard BEFORE UPDATE OR DELETE ON app.lab_documents
+  FOR EACH ROW EXECUTE FUNCTION app.guard_lab_document();
+
 DROP TRIGGER IF EXISTS encounters_guard ON app.encounters;
 CREATE TRIGGER encounters_guard BEFORE UPDATE OR DELETE ON app.encounters
   FOR EACH ROW EXECUTE FUNCTION app.guard_encounter();
@@ -324,7 +345,7 @@ CREATE TRIGGER allergies_no_delete BEFORE DELETE ON app.allergies
 DO $$
 DECLARE tbl text;
 BEGIN
-  FOREACH tbl IN ARRAY ARRAY['allergy_history', 'encounter_amendments', 'lab_results', 'admission_payments'] LOOP
+  FOREACH tbl IN ARRAY ARRAY['allergy_history', 'encounter_amendments', 'lab_results', 'lab_document_files', 'admission_payments'] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON app.%I', tbl || '_append_only', tbl);
     EXECUTE format(
       'CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION sys.reject_change()',

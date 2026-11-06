@@ -223,8 +223,11 @@ export async function importStarterCatalog(tx: Tx, clinicId: string): Promise<Re
  * What each starter test reports. A test the clinic has already given its own
  * parameters is left alone, as is anything it edited or deactivated.
  */
-async function importLabParameters(tx: Tx, clinicId: string) {
-  const tests = await tx.select({ id: labTests.id, starterKey: labTests.starterKey }).from(labTests).where(and(eq(labTests.clinicId, clinicId), isNotNull(labTests.starterKey)));
+async function importLabParameters(tx: Tx, clinicId: string, testId?: string) {
+  const tests = await tx
+    .select({ id: labTests.id, starterKey: labTests.starterKey })
+    .from(labTests)
+    .where(and(eq(labTests.clinicId, clinicId), isNotNull(labTests.starterKey), testId ? eq(labTests.id, testId) : undefined));
   const existing = new Set((await tx.select({ testId: labTestParameters.testId }).from(labTestParameters).where(eq(labTestParameters.clinicId, clinicId))).map((p) => p.testId));
   let count = 0;
   for (const test of tests) {
@@ -263,4 +266,18 @@ async function importLabParameters(tx: Tx, clinicId: string) {
     count += rows.length;
   }
   return count;
+}
+
+/**
+ * A starter test in a clinic set up before parameters existed has none until
+ * someone presses Import. The technician should not have to wait for that, so
+ * opening such a test fills them in. Anything the clinic has done to the test's
+ * parameters, even turning them all off, is left alone.
+ */
+export async function ensureStarterParameters(tx: Tx, clinicId: string, testId: string) {
+  const has = async () => (await tx.select({ id: labTestParameters.id }).from(labTestParameters).where(eq(labTestParameters.testId, testId)).limit(1)).length > 0;
+  if (await has()) return 0;
+  const [test] = await tx.select({ starterKey: labTests.starterKey }).from(labTests).where(eq(labTests.id, testId)).for("update").limit(1);
+  if (!test || !STARTER_LAB_PARAMETERS[test.starterKey ?? ""] || (await has())) return 0;
+  return importLabParameters(tx, clinicId, testId);
 }

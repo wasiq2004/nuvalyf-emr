@@ -5,8 +5,11 @@ import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
 import { todayInTimeZone } from "@/lib/time";
+import { documentsToPrint } from "@/features/clinical/lab-document-rules";
+import { labDocumentContents } from "@/features/clinical/lab-documents.service";
 import { labReport } from "@/features/clinical/lab.service";
 import { pdfResponse, pharmacyPdfContext } from "@/features/pharmacy/pdf-context";
+import { appendDocuments } from "@/lib/pdf/attachments";
 import { renderLabReportPdf } from "@/lib/pdf/lab-report-pdf";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ encounterId: string }> }) {
@@ -25,8 +28,13 @@ export async function GET(_request: Request, { params }: { params: Promise<{ enc
     const report = await labReport(tx, encounterId, todayInTimeZone(ctx.timezone));
     if (!report) return null;
     await recordAudit(tx, { clinicId: ctx.clinicId, actorUserId: ctx.userId, action: "LAB_REPORT_PRINTED", targetType: "encounter", targetId: encounterId, patientId: report.patientId, meta });
-    return { report, context: await pharmacyPdfContext(tx, ctx.clinicId) };
+    const documents = report.tests.flatMap((t) => t.documents);
+    const contents = await labDocumentContents(tx, documentsToPrint(documents).map((d) => d.id));
+    return { report, documents, contents, context: await pharmacyPdfContext(tx, ctx.clinicId) };
   });
   if (!data) return new Response("No results to report yet.", { status: 404 });
-  return pdfResponse(await renderLabReportPdf(data.report, data.context.letterhead, data.context.timezone), `lab-report-${data.report.patient.mrn}`);
+  const { mrn, name } = data.report.patient;
+  const report = await renderLabReportPdf(data.report, data.context.letterhead, data.context.timezone);
+  const printable = data.documents.map((d) => ({ name: d.name, contentType: d.contentType, content: data.contents.get(d.id) ?? null }));
+  return pdfResponse(await appendDocuments(report, printable, `${name} ${mrn}`), `lab-report-${mrn}`);
 }

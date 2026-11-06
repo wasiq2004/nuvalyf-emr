@@ -84,6 +84,15 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 5.5 | Lab report prints correctly, with out-of-range values marked | ✓ | | |
 | 5.6 | Pathologist has reviewed the reference ranges for every test in use | ✓ | | |
 | 5.7 | Patient's results by date and trend chart are correct | | | |
+| 5.8 | Opening a test shows its parameters with no Import, in an existing clinic too | ✓ | | |
+| 5.9 | Technician adds a parameter; a value outside the range typed is flagged; it prints and shows in History | ✓ | | |
+| 5.10 | PDF, JPG and PNG attach; a renamed file of another type and a file over 10 MB are refused | ✓ | | |
+| 5.11 | Attached documents show on the patient record and consultation, and print after the report | ✓ | | |
+| 5.12 | A portrait phone photo prints the right way up | | | |
+| 5.13 | A document added after the doctor read the result returns it to Unread | ✓ | | |
+| 5.14 | A result can be only a document, and needs an interpretation | | | |
+| 5.15 | A removed document needs a reason, no longer opens or prints, and stays listed for the lab | ✓ | | |
+| 5.16 | Receptionist cannot see or open lab documents | ✓ | | |
 
 ## 6. Billing
 

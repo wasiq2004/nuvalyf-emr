@@ -7,7 +7,7 @@ How to deploy, back up, monitor and scale NuvaLyf. For the security model see [S
 ### Requirements
 
 - A Linux host with Docker and Docker Compose v2. 2 vCPU and 4 GB RAM is plenty for a single clinic or a small group (see [load test](#load-test)).
-- A domain name and a TLS-terminating reverse proxy (Caddy, nginx or a cloud load balancer). NuvaLyf must be served over https in production.
+- A domain name and a TLS-terminating reverse proxy (Caddy, nginx or a cloud load balancer). NuvaLyf must be served over https in production. Lab documents are uploaded at up to 10 MB each: nginx needs `client_max_body_size 12m;` (its default is 1 MB). Traefik and Caddy need no change.
 - Encrypted disk for the database volume and backups.
 
 ### First install
@@ -90,6 +90,8 @@ Migrations only move forward. To roll back a bad release, restore the pre-upgrad
 ```
 30 1 * * *  cd /srv/medflow && scripts/ops/backup.sh /srv/backups >> /var/log/medflow-backup.log 2>&1
 ```
+
+Lab documents are stored in the database, so backups grow with them. Watch backup size and disk space.
 
 **Retention:** keep 30 daily and 12 monthly copies, and copy every backup **off the server** (object storage with versioning or a second site), encrypted. Clinical records generally have multi-year legal retention; follow local regulation for how long monthly copies are kept. Remove old local files with, for example, `find /srv/backups -name 'medflow-*.dump' -mtime +30 -delete`.
 

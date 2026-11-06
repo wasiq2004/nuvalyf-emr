@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { CheckCircle2, FlaskConical, Hourglass, Printer, Siren } from "lucide-react";
-import { buttonClass } from "@/components/app/buttons";
+import { ButtonLink, buttonClass } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel, StatCard } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -9,8 +9,7 @@ import { requireClinic } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { formatRelative, formatTime } from "@/lib/format";
 import { todayInTimeZone, zonedTimeToUtc } from "@/lib/time";
-import { entryFieldsFor, listLabWorklist, listRecentResults, type LabWorkItem } from "@/features/clinical/lab.service";
-import { EnterResultDialog, ParameterResultDialog } from "./LabActions";
+import { listLabWorklist, listRecentResults, type LabWorkItem } from "@/features/clinical/lab.service";
 
 export const metadata = { title: "Lab" };
 
@@ -33,10 +32,10 @@ export default async function LabPage() {
   const startOfDay = zonedTimeToUtc(today, "00:00", ctx.timezone);
   const now = new Date();
 
-  const { pending, done, fields } = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => {
-    const worklist = await listLabWorklist(tx, today);
-    return { pending: worklist, done: await listRecentResults(tx, today, startOfDay), fields: await entryFieldsFor(tx, worklist) };
-  });
+  const { pending, done } = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => ({
+    pending: await listLabWorklist(tx, today),
+    done: await listRecentResults(tx, today, startOfDay),
+  }));
 
   return (
     <PageShell>
@@ -81,12 +80,11 @@ export default async function LabPage() {
               key: "actions",
               header: "",
               align: "right",
-              cell: (r) =>
-                fields.get(r.id)?.length ? (
-                  <ParameterResultDialog id={r.id} testName={r.testName} patientName={r.patientName} fields={fields.get(r.id)!} />
-                ) : (
-                  <EnterResultDialog id={r.id} testName={r.testName} patientName={r.patientName} unit={r.unit} referenceRange={r.referenceRange} />
-                ),
+              cell: (r) => (
+                <ButtonLink href={`/lab/orders/${r.id}`} size="sm">
+                  Enter result
+                </ButtonLink>
+              ),
             },
           ]}
         />
@@ -100,7 +98,15 @@ export default async function LabPage() {
           columns={[
             { key: "time", header: "Resulted", cell: (r) => formatTime(r.resultedAt, ctx.timezone) },
             { key: "patient", header: "Patient", cell: (r) => <Patient item={r} /> },
-            { key: "test", header: "Test", cell: (r) => r.testName },
+            {
+              key: "test",
+              header: "Test",
+              cell: (r) => (
+                <Link href={`/lab/orders/${r.id}`} className="font-medium text-zinc-900 hover:underline dark:text-zinc-100">
+                  {r.testName}
+                </Link>
+              ),
+            },
             {
               key: "result",
               header: "Result",

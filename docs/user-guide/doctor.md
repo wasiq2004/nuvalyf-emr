@@ -9,7 +9,7 @@ You see patients, write notes, diagnose, prescribe, order tests and sign. Before
 - **Pharmacy questions:** the pharmacist's questions about your prescriptions. Type **Your answer** and click **Reply**.
 - **With you now:** a consultation you have open. **Continue consultation**.
 - **Your queue:** **Call next patient** takes the next in line (emergencies and triaged patients first), or **Call** a specific patient.
-- **Unread results:** lab results for your patients. **Open consultation** to review, **Mark read** when done.
+- **Unread results:** lab results for your patients. **Open consultation** to review, **Mark read** when done. A document the lab adds later brings the result back here.
 
 ## The consultation
 
@@ -41,6 +41,10 @@ Only the doctor who opened a consultation can edit it. If a colleague is unavail
 ## Suggestions
 
 While you write a consultation, NuvaLyf shows what you use most: **Frequently used** diagnoses, **Frequently ordered** lab tests, **Frequently prescribed** medicines with your usual dose, and what you usually give for today's diagnosis. Clicking a medicine fills the form, and the allergy and interaction check still runs. **Repeat** copies the patient's last prescription, leaving out anything with a serious warning.
+
+## Lab documents
+
+Documents from the lab show under the test on the consultation, and under **Lab documents** on the patient's record. They print with the **Lab report**. Opening one is recorded in the audit trail.
 
 ## What the pharmacy gave
 

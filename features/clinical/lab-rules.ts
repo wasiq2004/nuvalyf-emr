@@ -12,12 +12,18 @@ export type LabRange = {
   criticalHigh: number | null;
 };
 
-export const LAB_FLAGS = ["normal", "low", "high", "critical_low", "critical_high", "abnormal"] as const;
+export const LAB_FLAGS = ["normal", "low", "high", "critical_low", "critical_high", "abnormal", "critical"] as const;
 export type LabFlag = (typeof LAB_FLAGS)[number];
 
-export const LAB_FLAG_LABELS: Record<LabFlag, string> = { normal: "", low: "Low", high: "High", critical_low: "Critical low", critical_high: "Critical high", abnormal: "Abnormal" };
+/** What a technician can choose for a parameter they added themselves. */
+export const CHOSEN_LAB_FLAGS = ["normal", "low", "high", "abnormal", "critical"] as const satisfies readonly LabFlag[];
+export type ChosenLabFlag = (typeof CHOSEN_LAB_FLAGS)[number];
+
+export const LAB_FLAG_LABELS: Record<LabFlag, string> = { normal: "", low: "Low", high: "High", critical_low: "Critical low", critical_high: "Critical high", abnormal: "Abnormal", critical: "Critical" };
 /** The short mark printed beside a value. */
-export const LAB_FLAG_MARKS: Record<LabFlag, string> = { normal: "", low: "L", high: "H", critical_low: "LL", critical_high: "HH", abnormal: "*" };
+export const LAB_FLAG_MARKS: Record<LabFlag, string> = { normal: "", low: "L", high: "H", critical_low: "LL", critical_high: "HH", abnormal: "*", critical: "**" };
+
+export const isCriticalFlag = (flag: string) => flag === "critical" || flag === "critical_low" || flag === "critical_high";
 
 /** Sex-specific beats "any"; among those, the narrowest age band that fits. */
 export function pickRange(ranges: LabRange[], sex: string, age: number | null): LabRange | null {
@@ -56,7 +62,7 @@ export function rangeText(range: LabRange | null, normal?: string | null): strin
 
 /** The order's overall flag, for the doctor's unread list. */
 export function overallFlag(flags: LabFlag[]): "normal" | "abnormal" | "critical" {
-  if (flags.some((f) => f === "critical_low" || f === "critical_high")) return "critical";
+  if (flags.some(isCriticalFlag)) return "critical";
   return flags.every((f) => f === "normal") ? "normal" : "abnormal";
 }
 
@@ -64,6 +70,34 @@ export function overallFlag(flags: LabFlag[]): "normal" | "abnormal" | "critical
 export function parseLabNumber(text: string): number | null {
   const t = text.trim();
   return /^-?\d+(\.\d+)?$/.test(t) ? Number(t) : null;
+}
+
+/** Limits from a range the technician typed: "13 - 17", "13 to 17", "< 5", "> 40". */
+export function parseReference(text: string | null | undefined): { low: number | null; high: number | null } | null {
+  const t = (text ?? "").trim();
+  const between = /^(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)$/i.exec(t);
+  if (between) {
+    const [low, high] = [Number(between[1]), Number(between[2])];
+    return low <= high ? { low, high } : null;
+  }
+  const below = /^(?:<=?|≤|upto|up to)\s*(\d+(?:\.\d+)?)$/i.exec(t);
+  if (below) return { low: null, high: Number(below[1]) };
+  const above = /^(?:>=?|≥)\s*(\d+(?:\.\d+)?)$/i.exec(t);
+  if (above) return { low: Number(above[1]), high: null };
+  return null;
+}
+
+/**
+ * The flag on a parameter the technician added. Their choice stands, except that
+ * a number outside the range they typed can never be saved as normal.
+ */
+export function addedLineFlag(value: string, reference: string | null | undefined, chosen: ChosenLabFlag | undefined): LabFlag {
+  const picked = chosen ?? "normal";
+  const number = parseLabNumber(value);
+  const limits = parseReference(reference);
+  if (picked === "critical" || number === null || !limits) return picked;
+  const computed = numericFlag(number, { sex: "any", ageMinYears: 0, ageMaxYears: null, criticalLow: null, criticalHigh: null, ...limits });
+  return computed === "normal" ? picked : computed;
 }
 
 export type ResultLine = { name: string; value: string; unit: string | null; flag: LabFlag };

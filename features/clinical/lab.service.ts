@@ -10,7 +10,9 @@ import { AppError } from "@/lib/errors";
 import { ageOn, displayPatientName } from "@/features/patients/patient-rules";
 import { toZonedDateTime } from "@/lib/time";
 import { addSourceCharge, admissionForEncounter, voidSourceCharge } from "@/features/inpatient/inpatient.service";
-import { cumulativeRows, numericFlag, overallFlag, parseLabNumber, pickRange, rangeText, resultSummary, textFlag, type LabFlag, type LabRange } from "./lab-rules";
+import { ensureStarterParameters } from "@/lib/catalog/seed";
+import { RESULT_IN_DOCUMENT, activeDocumentCount, documentsForOrders, listOrderDocuments } from "./lab-documents.service";
+import { addedLineFlag, cumulativeRows, numericFlag, overallFlag, parseLabNumber, parseReference, pickRange, rangeText, resultSummary, textFlag, type ChosenLabFlag, type LabFlag, type LabRange } from "./lab-rules";
 import { requireOwnOpenEncounter, staffName } from "./encounters.service";
 
 export const RESULT_FLAGS = ["normal", "abnormal", "critical"] as const;
@@ -135,29 +137,7 @@ export function listRecentResults(tx: Tx, today: string, since: Date) {
   return labRows(tx, and(eq(labOrders.status, "resulted"), gte(labOrders.resultedAt, since)), today, "desc", 50);
 }
 
-export async function enterResult(
-  tx: Tx,
-  id: string,
-  input: { value: string; flag: (typeof RESULT_FLAGS)[number]; notes?: string },
-  userId: string,
-) {
-  const [row] = await tx
-    .update(labOrders)
-    .set({
-      status: "resulted",
-      resultValue: input.value,
-      resultFlag: input.flag,
-      resultNotes: input.notes ?? null,
-      resultedBy: userId,
-      resultedAt: new Date(),
-    })
-    .where(and(eq(labOrders.id, id), eq(labOrders.status, "ordered")))
-    .returning({ id: labOrders.id, patientId: labOrders.patientId, testName: labOrders.testName });
-  if (!row) throw new AppError("This test has already been resulted or was cancelled.");
-  return row;
-}
-
-export type UnreadResult = LabWorkItem;
+export type UnreadResult = LabWorkItem & { documents: number };
 
 /** Results for tests this doctor ordered that they have not read yet. */
 export async function listUnreadResults(tx: Tx, doctorId: string, today: string): Promise<UnreadResult[]> {
@@ -169,8 +149,10 @@ export async function listUnreadResults(tx: Tx, doctorId: string, today: string)
     .innerJoin(encounters, eq(encounters.id, labOrders.encounterId))
     .where(and(eq(labOrders.orderedBy, doctorId), eq(labOrders.status, "resulted"), isNull(labOrders.readAt)))
     .orderBy(desc(labOrders.resultedAt));
+  const documents = await documentsForOrders(tx, rows.map((r) => r.order.id));
   return rows.map((r) => ({
     id: r.order.id,
+    documents: documents.get(r.order.id)?.length ?? 0,
     encounterId: r.encounterId,
     patientId: r.order.patientId,
     testId: r.order.testId,
@@ -254,24 +236,38 @@ export async function entryFieldsFor(tx: Tx, items: { id: string; testId: string
   return map;
 }
 
-export async function enterParameterResults(tx: Tx, clinicId: string, id: string, input: { values: { parameterId: string; value: string }[]; notes?: string }, userId: string, today: string) {
+/** A parameter the technician added for this patient only. */
+export type AddedLine = { name: string; value: string; unit?: string; reference?: string; flag?: ChosenLabFlag };
+
+export type LabResultInput = {
+  /** The test's own parameters; blank ones are left off the report. */
+  values: { parameterId: string; value: string }[];
+  added?: AddedLine[];
+  notes?: string;
+  /** Needed only when the whole result is in an attached document. */
+  documentFlag?: (typeof RESULT_FLAGS)[number];
+};
+
+const limitText = (v: number | null | undefined) => (v === null || v === undefined ? null : String(v));
+
+/** Saves a result, once. Flags are decided here; a result is never edited afterwards. */
+export async function saveLabResult(tx: Tx, clinicId: string, id: string, input: LabResultInput, userId: string, today: string) {
   const [order] = await tx.select().from(labOrders).where(eq(labOrders.id, id)).for("update").limit(1);
   if (!order || order.status !== "ordered") throw new AppError("This test has already been resulted or was cancelled.");
   const [patient] = await tx.select().from(patients).where(eq(patients.id, order.patientId)).limit(1);
   const fields = (await entryFieldsFor(tx, [{ id, testId: order.testId, patientSex: patient?.sex ?? "unknown", patientAge: patient ? ageOn(patient, today) : null }])).get(id) ?? [];
   const typed = new Map(input.values.map((v) => [v.parameterId, v.value.trim()]));
+  const base = { clinicId, orderId: id, patientId: order.patientId };
 
-  const rows = fields.flatMap((field, index) => {
+  const rows: (typeof labResults.$inferInsert & { flag: LabFlag; unit: string | null })[] = fields.flatMap((field, index) => {
     const value = typed.get(field.id);
     if (!value) return [];
     const number = field.valueType === "number" ? parseLabNumber(value) : null;
-    if (field.valueType === "number" && number === null) throw new AppError(`${field.name}: enter a number, without the unit.`);
+    if (field.valueType === "number" && number === null) throw new AppError(`${field.name}: enter a number, without the unit. To report something else, add it as a new parameter.`);
     const flag = number !== null ? numericFlag(number, field.range) : textFlag(value, field.normalText);
     return [
       {
-        clinicId,
-        orderId: id,
-        patientId: order.patientId,
+        ...base,
         parameterId: field.id,
         name: field.name,
         section: field.section,
@@ -281,21 +277,47 @@ export async function enterParameterResults(tx: Tx, clinicId: string, id: string
         valueNumber: number === null ? null : String(number),
         flag,
         referenceText: field.reference || null,
-        refLow: field.range?.low === null || field.range?.low === undefined ? null : String(field.range.low),
-        refHigh: field.range?.high === null || field.range?.high === undefined ? null : String(field.range.high),
+        refLow: limitText(field.range?.low),
+        refHigh: limitText(field.range?.high),
       },
     ];
   });
-  if (rows.length === 0) throw new AppError("Enter at least one result.");
 
-  await tx.insert(labResults).values(rows);
-  const flags = rows.map((r) => r.flag);
-  const overall = overallFlag(flags);
+  const names = new Set(fields.map((f) => f.name.toLowerCase()));
+  (input.added ?? []).forEach((line, index) => {
+    const key = line.name.toLowerCase();
+    if (names.has(key)) throw new AppError(`${line.name} is already on this test.`);
+    names.add(key);
+    const number = parseLabNumber(line.value);
+    const limits = parseReference(line.reference);
+    rows.push({
+      ...base,
+      parameterId: null,
+      name: line.name,
+      // On a test with its own list, marks what was added to it.
+      section: fields.length ? "Additional" : null,
+      unit: line.unit ?? null,
+      sortOrder: fields.length + index,
+      value: line.value,
+      valueNumber: number === null ? null : String(number),
+      flag: addedLineFlag(line.value, line.reference, line.flag),
+      referenceText: line.reference ?? null,
+      refLow: limitText(limits?.low),
+      refHigh: limitText(limits?.high),
+    });
+  });
+
+  const documents = await activeDocumentCount(tx, id);
+  if (rows.length === 0 && documents === 0) throw new AppError("Enter at least one result, or attach the report.");
+  if (rows.length === 0 && !input.documentFlag) throw new AppError("Choose the interpretation of the attached report.");
+
+  if (rows.length) await tx.insert(labResults).values(rows);
+  const overall = rows.length ? overallFlag(rows.map((r) => r.flag)) : input.documentFlag!;
   await tx
     .update(labOrders)
     .set({
       status: "resulted",
-      resultValue: resultSummary(rows.map((r) => ({ name: r.name, value: r.value, unit: r.unit, flag: r.flag }))),
+      resultValue: rows.length ? resultSummary(rows.map((r) => ({ name: r.name, value: r.value, unit: r.unit, flag: r.flag }))) : RESULT_IN_DOCUMENT,
       resultFlag: overall,
       resultNotes: input.notes ?? null,
       resultedBy: userId,
@@ -305,7 +327,25 @@ export async function enterParameterResults(tx: Tx, clinicId: string, id: string
       referenceRange: null,
     })
     .where(eq(labOrders.id, id));
-  return { id, patientId: order.patientId, testName: order.testName, flag: overall, parameters: rows.length };
+  return { id, patientId: order.patientId, testName: order.testName, flag: overall, parameters: rows.length, documents };
+}
+
+/** One test for the entry page: who it is for, what to fill in, and what is attached. */
+export async function labOrderDetail(tx: Tx, clinicId: string, id: string, today: string) {
+  const [item] = await labRows(tx, and(eq(labOrders.id, id)), today, "asc", 1);
+  if (!item) return null;
+  if (item.status === "ordered" && item.testId) await ensureStarterParameters(tx, clinicId, item.testId);
+  const [test] = item.testId ? await tx.select({ sampleType: labTests.sampleType }).from(labTests).where(eq(labTests.id, item.testId)).limit(1) : [];
+  const [order] = await tx.select({ resultedBy: labOrders.resultedBy }).from(labOrders).where(eq(labOrders.id, id)).limit(1);
+  const [by] = order.resultedBy ? await tx.select().from(users).where(eq(users.id, order.resultedBy)).limit(1) : [];
+  return {
+    item,
+    sampleType: test?.sampleType ?? null,
+    resultedByName: by ? staffName(by) : null,
+    fields: item.status === "ordered" ? ((await entryFieldsFor(tx, [item])).get(id) ?? []) : [],
+    lines: (await resultsForOrders(tx, [id])).get(id) ?? [],
+    documents: await listOrderDocuments(tx, id),
+  };
 }
 
 export type LabResultLine = typeof labResults.$inferSelect;
@@ -336,6 +376,7 @@ export async function labReport(tx: Tx, encounterId: string, today: string) {
   const staff = staffIds.length ? await tx.select().from(users).where(inArray(users.id, staffIds)) : [];
   const testIds = done.map((o) => o.testId).filter((v): v is string => Boolean(v));
   const tests = testIds.length ? await tx.select({ id: labTests.id, sampleType: labTests.sampleType }).from(labTests).where(inArray(labTests.id, testIds)) : [];
+  const documents = await documentsForOrders(tx, done.map((o) => o.id));
   return {
     patientId: row.patient.id,
     patient: { name: displayPatientName(row.patient), mrn: row.patient.mrn, age: ageOn(row.patient, today), sex: row.patient.sex },
@@ -351,7 +392,8 @@ export async function labReport(tx: Tx, encounterId: string, today: string) {
         resultedAt: o.resultedAt!,
         resultedByName: by ? staffName(by) : null,
         notes: o.resultNotes,
-        // A single free-text result from before parameters, or a custom test.
+        documents: [...(documents.get(o.id) ?? [])].reverse().map((d) => ({ id: d.id, name: d.fileName, contentType: d.contentType, sizeBytes: d.sizeBytes })),
+        // A single free-text result from before parameters, or the result is in a document.
         single: results.has(o.id) ? null : { value: o.resultValue ?? "", unit: o.unit, reference: o.referenceRange, flag: o.resultFlag },
         lines: results.get(o.id) ?? [],
       };
@@ -375,7 +417,7 @@ export async function patientLabHistory(tx: Tx, patientId: string, timeZone: str
     name,
     ...cumulativeRows(
       list.map((r) => ({
-        key: r.line.parameterId ?? r.line.name,
+        key: r.line.parameterId ?? r.line.name.toLowerCase(),
         name: r.line.name,
         unit: r.line.unit,
         date: dateOf(r.resultedAt!),

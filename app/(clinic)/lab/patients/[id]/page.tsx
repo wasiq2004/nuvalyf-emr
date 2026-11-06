@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ArrowLeft, FlaskConical } from "lucide-react";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { TrendChart } from "@/components/app/charts";
+import { LabDocumentLinks } from "@/components/clinical/lab-document-links";
 import { can, hasModule, recordDenied, requireClinic } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
@@ -13,12 +14,13 @@ import { todayInTimeZone } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { getPatient } from "@/features/patients/patients.service";
 import { patientLabHistory } from "@/features/clinical/lab.service";
-import { LAB_FLAG_LABELS, LAB_FLAG_MARKS, type LabFlag } from "@/features/clinical/lab-rules";
+import { listPatientDocuments } from "@/features/clinical/lab-documents.service";
+import { LAB_FLAG_LABELS, LAB_FLAG_MARKS, isCriticalFlag, type LabFlag } from "@/features/clinical/lab-rules";
 
 export const metadata = { title: "Lab results" };
 
 const cellTone = (flag: LabFlag) =>
-  flag === "normal" ? "text-zinc-800 dark:text-zinc-200" : flag === "critical_low" || flag === "critical_high" ? "font-semibold text-red-700 dark:text-red-400" : "font-semibold text-amber-700 dark:text-amber-400";
+  flag === "normal" ? "text-zinc-800 dark:text-zinc-200" : isCriticalFlag(flag) ? "font-semibold text-red-700 dark:text-red-400" : "font-semibold text-amber-700 dark:text-amber-400";
 
 export default async function PatientLabPage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireClinic({ module: "lab" });
@@ -33,11 +35,11 @@ export default async function PatientLabPage({ params }: { params: Promise<{ id:
     const patient = await getPatient(tx, id, todayInTimeZone(ctx.timezone));
     if (!patient) return null;
     await recordAudit(tx, { clinicId: ctx.clinicId, actorUserId: ctx.userId, action: "LAB_RESULTS_VIEWED", targetType: "patient", targetId: id, patientId: id, meta });
-    return { patient, history: await patientLabHistory(tx, id, ctx.timezone) };
+    return { patient, history: await patientLabHistory(tx, id, ctx.timezone), documents: await listPatientDocuments(tx, id) };
   });
   if (!data) notFound();
-  const { patient, history } = data;
-  const nothing = history.tests.length === 0 && history.others.length === 0;
+  const { patient, history, documents } = data;
+  const nothing = history.tests.length === 0 && history.others.length === 0 && documents.length === 0;
 
   return (
     <PageShell width="wide">
@@ -115,6 +117,12 @@ export default async function PatientLabPage({ params }: { params: Promise<{ id:
           </Panel>
         );
       })}
+
+      {documents.length > 0 && (
+        <Panel title="Documents" description="Reports and images attached by the lab.">
+          <LabDocumentLinks documents={documents} timezone={ctx.timezone} />
+        </Panel>
+      )}
 
       {history.others.length > 0 && (
         <Panel title="Other results" description="Reported as a single result.">

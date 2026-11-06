@@ -77,7 +77,7 @@ When new entries are added to the built-in starter list, a banner offers **Impor
 
 ## Lab tests and ranges
 
-Under **Medicines & catalogues > Lab tests**, open a test to see what it reports. Add or edit parameters, and set reference ranges by sex and age. Choose **Import** once if the tests have no parameters yet. The starter ranges are typical adult values: have your pathologist check them before use.
+Under **Medicines & catalogues > Lab tests**, open a test to see what it reports. Add or edit parameters, and set reference ranges by sex and age. A starter test gets its parameters by itself the first time the lab opens it, or choose **Import** to load them all now. The starter ranges are typical adult values: have your pathologist check them before use.
 
 ## Beds and inpatient billing
 

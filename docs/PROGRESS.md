@@ -281,6 +281,13 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 - [x] Migrations 0020 to 0023; tests: 1,374 unit, 197 integration, 26 e2e scenarios
 - Fixed along the way: line breaks printed as "?" in every PDF; two random failures in the analytics tests
 
+## Client request: lab result entry and supporting documents ✅
+
+- [x] One page per test (`/lab/orders/[id]`); parameters appear with no Import, in existing clinics too
+- [x] Technician can add any parameter for one patient; it prints and trends, and cannot be saved as normal outside the range they typed
+- [x] Supporting documents (PDF, JPG, PNG): type checked from the content, shown in the patient record and consultation, printed after the report, late ones return to Unread, removal needs a reason
+- [x] Migration 0024; see [LAB_REPORTS.md](LAB_REPORTS.md)
+
 ---
 
 ## Decisions log
@@ -290,6 +297,7 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 | 2026-11-06 | Pharmacist may change dose, days, quantity and medicines with no doctor approval; removes the course limit |
 | 2026-11-06 | Bed billing: by the hour, or full 24-hour blocks when the toggle is off; minimum 24 hours, part hours round up (minimum and rounding to be confirmed with the client) |
 | 2026-11-06 | Discharge summary is issued with the balance shown, never held for payment |
+| 2026-11-06 | Lab documents are stored in Postgres, for tenant isolation and backups with no new service; object storage is a change to one module when volume calls for it |
 | 2026-10-16 | D1: patient portal kept but hidden; v1 portal code parked in `legacy/v1` |
 | 2026-10-16 | D6: basic starter medicine list, everything customizable per clinic |
 | 2026-10-16 | No `FORCE ROW LEVEL SECURITY`: the owner role is migration-only, and platform usage counts come from owner-defined views |

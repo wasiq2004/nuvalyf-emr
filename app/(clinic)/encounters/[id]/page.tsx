@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { z } from "zod";
-import { ArrowLeft, FileDown, History, Lock, Pill, Printer, Stethoscope, TriangleAlert } from "lucide-react";
+import { ArrowLeft, FileDown, History, Lock, Paperclip, Pill, Printer, Stethoscope, TriangleAlert } from "lucide-react";
 import { ButtonLink, buttonClass } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -30,7 +30,8 @@ import { dosageText } from "@/features/pharmacy/dispensing-rules";
 import { frequentDiagnoses, frequentLabTests, frequentMedicines, lastPrescription, medicinesForDiagnoses } from "@/features/clinical/suggestions.service";
 import { DispensedLines } from "@/components/pharmacy/dispensed-lines";
 import { listEncounterLabOrders, listLabTestOptions, resultsForOrders } from "@/features/clinical/lab.service";
-import { LAB_FLAG_MARKS, type LabFlag } from "@/features/clinical/lab-rules";
+import { documentsForOrders } from "@/features/clinical/lab-documents.service";
+import { LAB_FLAG_MARKS, isCriticalFlag, type LabFlag } from "@/features/clinical/lab-rules";
 import type { RxWarning } from "@/features/clinical/prescribing-rules";
 import { cn } from "@/lib/utils";
 import { AmendmentForm, LabOrderForm, NotesForm, PatientContactDialog, PrivateNoteForm, TriageNotesForm, VitalsDialog } from "./EncounterForms";
@@ -112,6 +113,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
       listPatientEncounters(tx, core.patient.id, 8),
     ]);
     const labLines = await resultsForOrders(tx, labOrders.map((o) => o.id));
+    const labDocuments = await documentsForOrders(tx, labOrders.map((o) => o.id));
     const stay = hasModule(ctx, "inpatient") ? await admissionForEncounter(tx, id) : null;
     const pharmacyOn = prescription?.status === "signed" && hasModule(ctx, "pharmacy");
     const queries = pharmacyOn ? await listQueriesForPrescription(tx, prescription.id) : [];
@@ -136,6 +138,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
       dispensed,
       suggestions,
       labLines,
+      labDocuments,
       stay,
       allergies,
       classes,
@@ -471,7 +474,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                                     <th scope="row" className="py-0.5 pr-4 text-left font-normal text-zinc-600 dark:text-zinc-400">
                                       {l.name}
                                     </th>
-                                    <td className={cn("py-0.5 pr-3 text-right tabular-nums", l.flag === "normal" ? "text-zinc-900 dark:text-zinc-100" : "font-semibold text-amber-700 dark:text-amber-400")}>
+                                    <td className={cn("py-0.5 pr-3 text-right tabular-nums", l.flag === "normal" ? "text-zinc-900 dark:text-zinc-100" : isCriticalFlag(l.flag) ? "font-semibold text-red-700 dark:text-red-400" : "font-semibold text-amber-700 dark:text-amber-400")}>
                                       {l.value} {LAB_FLAG_MARKS[l.flag as LabFlag]}
                                     </td>
                                     <td className="py-0.5 pr-3 text-xs text-zinc-500">{l.unit}</td>
@@ -493,6 +496,13 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                               {o.notes ? ` · ${o.notes}` : ""}
                             </p>
                           )}
+                          {o.status === "resulted" && data.labLines.get(o.id) && o.resultNotes && <p className="mt-1 text-xs text-zinc-500">Note: {o.resultNotes}</p>}
+                          {data.labDocuments.get(o.id)?.map((d) => (
+                            <a key={d.id} href={`/lab/documents/${d.id}`} target="_blank" rel="noopener" className="mt-1 flex max-w-full items-center gap-1.5 text-sm text-zinc-700 hover:underline dark:text-zinc-300">
+                              <Paperclip className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{d.fileName}</span>
+                            </a>
+                          ))}
                         </div>
                         <div className="flex items-center gap-2">
                           {o.status === "ordered" && <StatusBadge tone="info">Awaiting result</StatusBadge>}

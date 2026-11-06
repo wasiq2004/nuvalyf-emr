@@ -2,6 +2,7 @@
 // nurse triage -> doctor consultation -> lab.
 import { execSync } from "child_process";
 import { expect, test, type Page } from "@playwright/test";
+import { PDFDocument } from "pdf-lib";
 import { clinicFirstSignIn, operatorSignIn, readOneTimePassword } from "./helpers";
 
 test.describe.configure({ mode: "serial" });
@@ -320,19 +321,46 @@ test("Lab technician enters the result; it waits on the doctor's screen until re
   const page = labPage;
   await clinicFirstSignIn(page, clinicCode, accounts.lab.email, accounts.lab.otp, accounts.lab.password, "**/lab");
   await expect(page.getByRole("cell", { name: "Haemoglobin" })).toBeVisible();
-  await page.getByRole("button", { name: "Enter result" }).click();
+  await page.getByRole("link", { name: "Enter result" }).click();
+  await page.waitForURL(/\/lab\/orders\/[0-9a-f-]+$/);
 
   // The test's own parameter, checked against this patient's range as it is typed.
-  await expect(page.getByRole("dialog").getByText("12 - 15")).toBeVisible();
+  await expect(page.getByText("12 - 15")).toBeVisible();
   await page.getByLabel("Haemoglobin result").fill("10.2");
-  await expect(page.getByRole("dialog").getByText("Low", { exact: true })).toBeVisible();
+  await expect(page.getByText("Low", { exact: true })).toBeVisible();
+
+  // A parameter that is not on the test, added on the spot.
+  await page.getByRole("button", { name: "Add parameter" }).click();
+  await page.getByLabel("Parameter name").fill("Sample colour");
+  await page.getByLabel("Sample colour result").fill("Pale");
+  await page.getByLabel("Flag").selectOption("abnormal");
+
+  // A supporting document; a file that only claims to be a PDF is refused.
+  const upload = page.getByLabel("Upload a supporting document");
+  await upload.setInputFiles({ name: "fake.pdf", mimeType: "application/pdf", buffer: Buffer.from("<html>not a pdf</html>") });
+  await expect(page.getByText("Upload a PDF, JPG or PNG file.")).toBeVisible();
+  const scan = await PDFDocument.create();
+  scan.addPage([300, 300]);
+  await upload.setInputFiles({ name: "machine printout.pdf", mimeType: "application/pdf", buffer: Buffer.from(await scan.save()) });
+  await expect(page.getByRole("link", { name: "machine printout.pdf" })).toBeVisible();
+  // What was typed survives the upload.
+  await expect(page.getByLabel("Haemoglobin result")).toHaveValue("10.2");
+
   await page.getByRole("button", { name: "Save result" }).click();
   await expect(page.getByText("Result sent to the doctor")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Print report" })).toBeVisible();
+  await expect(page.getByRole("rowheader", { name: "Sample colour" })).toBeVisible();
+
+  const documentUrl = await page.getByRole("link", { name: "machine printout.pdf" }).getAttribute("href");
+  const opened = await page.request.get(documentUrl!);
+  expect(opened.headers()["content-type"]).toBe("application/pdf");
+  expect(opened.headers()["cache-control"]).toContain("no-store");
 
   // A printable report, and the history; a lab technician has no consultation access.
   const report = await page.request.get(`/lab/report/${new URL(encounterUrl).pathname.split("/").pop()}`);
   expect(report.status()).toBe(200);
   expect(report.headers()["content-type"]).toContain("application/pdf");
+  expect((await PDFDocument.load(await report.body())).getPageCount()).toBe(2); // the report, then the printout
   await page.getByRole("link", { name: "History" }).click();
   await page.waitForURL(/\/lab\/patients\/[0-9a-f-]+$/);
   await expect(page.getByRole("rowheader", { name: /Haemoglobin/ })).toContainText("g/dL");
@@ -342,6 +370,7 @@ test("Lab technician enters the result; it waits on the doctor's screen until re
   const unread = doctorPage.locator("section", { has: doctorPage.getByRole("heading", { name: "Unread results" }) });
   await expect(unread).toContainText("Haemoglobin");
   await expect(unread).toContainText("10.2");
+  await expect(unread).toContainText("1 document attached");
   await unread.getByRole("button", { name: "Mark read" }).click();
   await expect(unread).toContainText("Nothing new");
 });
