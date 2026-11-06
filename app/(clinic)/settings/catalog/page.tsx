@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { forbidden } from "next/navigation";
 import { BookOpenCheck, FlaskConical, HeartPulse, Pill, Search, ShieldAlert, Sparkles, Stethoscope, Zap } from "lucide-react";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
@@ -17,6 +18,7 @@ import {
   listDrugs,
   listGenericNames,
   listInteractions,
+  labParameterCounts,
   listLabTests,
   listPresetsForEdit,
   listVitalRanges,
@@ -55,7 +57,7 @@ const SECTION_FOR_TAB: Record<TabKey, CatalogSection[]> = {
   presets: ["presets"],
   diagnoses: ["diagnoses"],
   vitals: ["vitalRanges"],
-  lab: ["labTests"],
+  lab: ["labTests", "labParameters"],
 };
 
 const SEVERITY_TONE = { minor: "neutral", moderate: "warning", major: "danger", contraindicated: "danger" } as const;
@@ -123,7 +125,7 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
       case "vitals":
         return { kind: "vitals" as const, missing, classes, ranges: await listVitalRanges(tx) };
       case "lab":
-        return { kind: "lab" as const, missing, classes, tests: await listLabTests(tx), currency: (await getClinicSettings(tx, ctx.clinicId)).currency };
+        return { kind: "lab" as const, missing, classes, tests: await listLabTests(tx), parameterCounts: await labParameterCounts(tx), currency: (await getClinicSettings(tx, ctx.clinicId)).currency };
     }
   });
 
@@ -486,11 +488,12 @@ export default async function CatalogPage({ searchParams }: { searchParams: Prom
                 key: "name",
                 header: "Test",
                 cell: (t) => (
-                  <p className={cn("flex items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100", !t.isActive && "opacity-60")}>
+                  <Link href={`/settings/catalog/lab/${t.id}`} className={cn("flex items-center gap-2 font-medium text-zinc-900 hover:underline dark:text-zinc-100", !t.isActive && "opacity-60")}>
                     {t.name} <Inactive active={t.isActive} />
-                  </p>
+                  </Link>
                 ),
               },
+              { key: "params", header: "Parameters", hideOnMobile: true, align: "right", cell: (t) => data.parameterCounts.get(t.id) ?? "—" },
               { key: "sample", header: "Sample", hideOnMobile: true, cell: (t) => t.sampleType ?? "—" },
               { key: "range", header: "Reference", hideOnMobile: true, cell: (t) => [t.referenceRange, t.unit].filter(Boolean).join(" ") || "—" },
               { key: "price", header: "Price", hideOnMobile: true, cell: (t) => (t.price ? formatMoney(t.price, data.currency) : "—") },

@@ -6,9 +6,10 @@ import { ownerSql } from "./test-db";
 import { createTestClinic } from "./fixtures";
 import { withClinic } from "@/lib/db";
 import { AppError, isLockedRecord, pgError } from "@/lib/errors";
-import { allergyClasses, drugs, drugInteractions, encounters, prescriptions, visits } from "@/lib/db/schema";
+import { allergyClasses, drugs, drugInteractions, encounters, labTests, prescriptions, visits } from "@/lib/db/schema";
 import { createStaff } from "@/features/staff/staff.service";
-import { registerPatient } from "@/features/patients/patients.service";
+import { registerPatient, updatePatientContact } from "@/features/patients/patients.service";
+import { SYSTEM_ROLES } from "@/lib/access/roles";
 import { addWalkIn } from "@/features/scheduling/booking.service";
 import { importStarterCatalog, missingStarterCounts } from "@/lib/catalog/seed";
 import {
@@ -16,19 +17,24 @@ import {
   callNext,
   callPatient,
   finalizeEncounter,
+  getEncounterCore,
   getPrivateNote,
   handOver,
+  listClinicalQueue,
   saveNotes,
   savePrivateNote,
+  saveTriageNotes,
   startTriage,
   takeOverEncounter,
 } from "@/features/clinical/encounters.service";
 import { recordVitals } from "@/features/clinical/vitals.service";
+import { frequentDiagnoses, frequentMedicines, lastPrescription, medicinesForDiagnoses, repeatPrescription } from "@/features/clinical/suggestions.service";
 import { addAllergy, correctAllergy, listAllergyHistory, recordNoKnownAllergies } from "@/features/clinical/allergies.service";
 import { addDiagnosis, searchDiagnosisCodes } from "@/features/clinical/diagnoses.service";
 import { addPrescriptionItem, getDraftPrescription, getSignedPrescription, searchDrugs, warningsFor } from "@/features/clinical/prescriptions.service";
-import { enterResult, listLabTestOptions, listUnreadResults, markResultRead, orderLab } from "@/features/clinical/lab.service";
-import { createDrug, saveVitalRange, setEntryActive } from "@/features/catalog/catalog.service";
+import { enterParameterResults, enterResult, entryFieldsFor, labReport, listLabTestOptions, listUnreadResults, markResultRead, orderLab, patientLabHistory } from "@/features/clinical/lab.service";
+import { renderLabReportPdf } from "@/lib/pdf/lab-report-pdf";
+import { createDrug, deleteLabRange, getLabTestWithParameters, saveLabParameter, saveLabRange, saveVitalRange, setEntryActive } from "@/features/catalog/catalog.service";
 import { todayInTimeZone } from "@/lib/time";
 
 const TZ = "Asia/Kolkata";
@@ -40,11 +46,13 @@ let adminId: string;
 let doctorId: string;
 let unregisteredDoctorId: string;
 let nurseId: string;
+let labId: string;
 
 const as = (userId: string) => <T,>(fn: Parameters<typeof withClinic<T>>[1]) => withClinic({ clinicId: clinic.clinicId, userId }, fn);
 const asAdmin = () => as(adminId);
 const asDoctor = () => as(doctorId);
 const asNurse = () => as(nurseId);
+const asLab = () => as(labId);
 
 async function newPatient(firstName: string, age = 40) {
   return asAdmin()((tx) =>
@@ -89,6 +97,7 @@ beforeAll(async () => {
   doctorId = (await mk("Meena", ["doctor"], "KMC-12345")).id;
   unregisteredDoctorId = (await mk("Ravi", ["doctor"])).id;
   nurseId = (await mk("Asha", ["nurse"])).id;
+  labId = (await mk("Lalit", ["lab_tech"])).id;
 });
 
 afterAll(async () => {
@@ -176,6 +185,98 @@ describe("triage → doctor", () => {
     const patient = await newPatient("Booked", 50);
     const visit = await walkIn(patient.id, doctorId);
     await expect(asDoctor()((tx) => callPatient(tx, clinic.clinicId, visit.id, unregisteredDoctorId, today))).rejects.toThrow(/another doctor/);
+  });
+});
+
+describe("nurse updates for the doctor", () => {
+  it("shows the doctor the latest vitals, who took them and when, before calling the patient", async () => {
+    const p = await newPatient("Vani");
+    const visit = await walkIn(p.id);
+    const { encounterId } = await asNurse()((tx) => startTriage(tx, clinic.clinicId, visit.id, today));
+    let row = (await asDoctor()((tx) => listClinicalQueue(tx, today))).find((q) => q.id === visit.id)!;
+    expect(row.latestVitals).toBeNull();
+
+    await asNurse()((tx) => recordVitals(tx, clinic.clinicId, encounterId, { systolic: 120, diastolic: 80 }, undefined, nurseId, today));
+    await asNurse()((tx) => recordVitals(tx, clinic.clinicId, encounterId, { systolic: 150, diastolic: 95, pulse: 90 }, "Repeat after rest", nurseId, today));
+    await asNurse()((tx) => saveTriageNotes(tx, encounterId, { chiefComplaint: "Headache since morning", nursingNotes: "Looks anxious" }, nurseId));
+
+    row = (await asDoctor()((tx) => listClinicalQueue(tx, today))).find((q) => q.id === visit.id)!;
+    expect(row.chiefComplaint).toBe("Headache since morning");
+    expect(row.latestVitals?.values).toMatchObject({ systolic: 150, diastolic: 95, pulse: 90 });
+    expect(row.latestVitals?.recordedByName).toContain("Asha");
+    expect(row.latestVitals?.recordedAt).toBeInstanceOf(Date);
+    const core = await asDoctor()((tx) => getEncounterCore(tx, encounterId, today));
+    expect(core).toMatchObject({ triageNotesByName: expect.stringContaining("Asha") });
+    expect(core?.encounter.nursingNotes).toBe("Looks anxious");
+  });
+
+  it("never reaches the doctor's own notes, and stops once the consultation is signed", async () => {
+    const { encounterId } = await consultation("Tara");
+    await asDoctor()((tx) => saveNotes(tx, encounterId, { chiefComplaint: "Cough", history: "Three days", plan: "Rest" }, doctorId));
+    await asNurse()((tx) => saveTriageNotes(tx, encounterId, { chiefComplaint: "Dry cough", nursingNotes: "Afebrile" }, nurseId));
+    const [row] = await owner`select chief_complaint, history, plan, nursing_notes from app.encounters where id = ${encounterId}`;
+    expect(row).toEqual({ chief_complaint: "Dry cough", history: "Three days", plan: "Rest", nursing_notes: "Afebrile" });
+    // Writing the doctor's notes and prescribing stay refused for a nurse at the action layer.
+    const nurse: readonly string[] = SYSTEM_ROLES.nurse.permissions;
+    for (const denied of ["encounter:write", "prescription:sign", "patient:write"]) expect(nurse).not.toContain(denied);
+    for (const allowed of ["encounter:read", "patient:contact", "vitals:write"]) expect(nurse).toContain(allowed);
+    await asDoctor()((tx) => finalizeEncounter(tx, encounterId, doctorId, today));
+    await expect(asNurse()((tx) => saveTriageNotes(tx, encounterId, { chiefComplaint: "x" }, nurseId))).rejects.toThrow(/finalised/);
+  });
+
+  it("updates contact details only", async () => {
+    const p = await newPatient("Gita");
+    await asNurse()((tx) => updatePatientContact(tx, p.id, { mobile: "9876543210", city: "Madurai" }));
+    const [row] = await owner`select first_name, mobile, city from app.patients where id = ${p.id}`;
+    expect(row).toEqual({ first_name: "Gita", mobile: "9876543210", city: "Madurai" });
+  });
+});
+
+describe("suggestions for the doctor", () => {
+  const prescribeAndSign = async (patientName: string, drugName: string, code: string) => {
+    const { encounterId } = await consultation(patientName);
+    const id = await drugId(drugName);
+    await asDoctor()((tx) => addDiagnosis(tx, clinic.clinicId, encounterId, { code, label: "Test diagnosis", isPrimary: true }, doctorId));
+    await asDoctor()((tx) => addPrescriptionItem(tx, clinic.clinicId, encounterId, { drugId: id, dose: "1 tablet", frequency: "HS", durationDays: 7, quantity: null }, doctorId));
+    await asDoctor()((tx) => finalizeEncounter(tx, encounterId, doctorId, today));
+  };
+
+  it("learn this doctor's usual medicine, dose and diagnosis, and what goes with a diagnosis", async () => {
+    await prescribeAndSign("Sug One", "Cetirizine 10", "T78.4");
+    await prescribeAndSign("Sug Two", "Cetirizine 10", "T78.4");
+    await prescribeAndSign("Sug Three", "Cetirizine 10", "T78.4");
+    const frequent = await asDoctor()((tx) => frequentMedicines(tx, doctorId));
+    expect(frequent[0]).toMatchObject({ name: "Cetirizine 10", defaultDose: "1 tablet", defaultFrequency: "HS", defaultDurationDays: 7 });
+    expect(frequent[0].timesUsed).toBeGreaterThanOrEqual(3);
+    const withDiagnosis = await asDoctor()((tx) => medicinesForDiagnoses(tx, doctorId, ["T78.4"]));
+    expect(withDiagnosis.map((m) => m.name)).toContain("Cetirizine 10");
+    expect(await asDoctor()((tx) => medicinesForDiagnoses(tx, doctorId, ["Z99.9"]))).toEqual([]);
+    expect((await asDoctor()((tx) => frequentDiagnoses(tx, doctorId))).map((d) => d.code)).toContain("T78.4");
+  });
+
+  it("repeat the last prescription, leaving out what now has a serious warning", async () => {
+    const p = await newPatient("Repeat");
+    const first = await asAdmin()((tx) => addWalkIn(tx, clinic.clinicId, { patientId: p.id, doctorId }, adminId, today));
+    const { encounterId: firstEncounter } = await asDoctor()((tx) => callPatient(tx, clinic.clinicId, first.id, doctorId, today));
+    for (const name of ["Cetirizine 10", "Amoxicillin 500"]) {
+      const id = await drugId(name);
+      await asDoctor()((tx) => addPrescriptionItem(tx, clinic.clinicId, firstEncounter, { drugId: id, dose: "1 tablet", frequency: "BD", durationDays: 5, quantity: null }, doctorId));
+    }
+    await asDoctor()((tx) => finalizeEncounter(tx, firstEncounter, doctorId, today));
+    const [penicillins] = await asAdmin()((tx) => tx.select().from(allergyClasses).where(eq(allergyClasses.name, "Penicillins")));
+    await asNurse()((tx) => addAllergy(tx, clinic.clinicId, p.id, { substance: "Penicillin", allergyClassId: penicillins.id, severity: "severe" }, nurseId));
+
+    const second = await asAdmin()((tx) => addWalkIn(tx, clinic.clinicId, { patientId: p.id, doctorId }, adminId, today));
+    const { encounterId } = await asDoctor()((tx) => callPatient(tx, clinic.clinicId, second.id, doctorId, today));
+    const last = await asDoctor()((tx) => lastPrescription(tx, p.id, encounterId));
+    expect(last?.items.map((i) => i.drugName).sort()).toEqual(["Amoxicillin 500", "Cetirizine 10"]);
+    const result = await asDoctor()((tx) => repeatPrescription(tx, clinic.clinicId, encounterId, last!.id, doctorId));
+    expect(result).toMatchObject({ added: ["Cetirizine 10"], skipped: ["Amoxicillin 500"] });
+    const again = await asDoctor()((tx) => repeatPrescription(tx, clinic.clinicId, encounterId, last!.id, doctorId));
+    expect(again.added).toEqual([]);
+    const draft = await asDoctor()((tx) => getDraftPrescription(tx, encounterId));
+    expect(draft?.items.map((i) => i.drugName)).toEqual(["Cetirizine 10"]);
+    await expect(asDoctor()((tx) => repeatPrescription(tx, clinic.clinicId, encounterId, draft!.id, doctorId))).rejects.toThrow(/cannot be repeated/);
   });
 });
 
@@ -366,6 +467,88 @@ describe("lab", () => {
     await asDoctor()((tx) => finalizeEncounter(tx, encounterId, doctorId, today));
     const tests = await asDoctor()((tx) => listLabTestOptions(tx));
     await expect(asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, tests[0].id, undefined, doctorId))).rejects.toThrow(AppError);
+  });
+});
+
+describe("lab tests with their own parameters", () => {
+  const cbc = async () => (await owner`select id from app.lab_tests where clinic_id = ${clinic.clinicId} and starter_key = 'cbc'`)[0].id as string;
+  const female = async (name: string) => {
+    const p = await asAdmin()((tx) => registerPatient(tx, clinic.clinicId, { firstName: name, sex: "female", statedAgeYears: 34 }, { likelyIds: [], actorId: adminId, today }));
+    const visit = await walkIn(p.id, doctorId);
+    const called = await asDoctor()((tx) => callPatient(tx, clinic.clinicId, visit.id, doctorId, today));
+    return { patientId: p.id, encounterId: called.encounterId };
+  };
+  const fieldsOf = async (orderId: string, patientSex: string, patientAge: number, testId: string) =>
+    (await asDoctor()((tx) => entryFieldsFor(tx, [{ id: orderId, testId, patientSex, patientAge }]))).get(orderId)!;
+
+  it("every starter test gets what it reports, ranges included, and re-import adds nothing", async () => {
+    const [count] = await owner`select count(*)::int as n from app.lab_test_parameters p join app.lab_tests t on t.id = p.test_id where p.clinic_id = ${clinic.clinicId} and t.starter_key = 'cbc'`;
+    expect(count.n).toBeGreaterThanOrEqual(14);
+    const again = await asAdmin()((tx) => importStarterCatalog(tx, clinic.clinicId));
+    expect(again.labParameters).toBe(0);
+  });
+
+  it("flags each value against this patient's own range and sends the doctor a summary", async () => {
+    const { encounterId, patientId } = await female("Lakshmi");
+    const testId = await cbc();
+    const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, testId, undefined, doctorId));
+    const fields = await fieldsOf(order.id, "female", 34, testId);
+    const hb = fields.find((f) => f.name === "Haemoglobin")!;
+    const plt = fields.find((f) => f.name === "Platelet count")!;
+    expect(hb.reference).toBe("12 - 15"); // the female range, not the male one
+
+    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "11 g/dL" }] }, labId, today))).rejects.toThrow(/enter a number/);
+    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: " " }] }, labId, today))).rejects.toThrow(/at least one/);
+
+    const result = await asLab()((tx) =>
+      enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "6.5" }, { parameterId: plt.id, value: "250000" }], notes: "Repeat sample" }, labId, today),
+    );
+    expect(result).toMatchObject({ flag: "critical", parameters: 2 });
+    const rows = await owner`select name, value, flag, reference_text from app.lab_results where order_id = ${order.id} order by sort_order`;
+    expect(rows).toEqual([
+      { name: "Haemoglobin", value: "6.5", flag: "critical_low", reference_text: "12 - 15" },
+      { name: "Platelet count", value: "250000", flag: "normal", reference_text: "150000 - 410000" },
+    ]);
+    const [unread] = await asDoctor()((tx) => listUnreadResults(tx, doctorId, today)).then((list) => list.filter((u) => u.id === order.id));
+    expect(unread.resultFlag).toBe("critical");
+    expect(unread.resultValue).toContain("Haemoglobin 6.5 g/dL (LL)");
+
+    // Saved results are permanent, and a later change to a range leaves them alone.
+    await expect(asLab()((tx) => enterParameterResults(tx, clinic.clinicId, order.id, { values: [{ parameterId: hb.id, value: "9" }] }, labId, today))).rejects.toThrow(/already been resulted/);
+    await expect(owner`update app.lab_results set value = '99' where order_id = ${order.id}`).rejects.toThrow(/append-only/);
+    await owner`update app.lab_parameter_ranges set low = 1 where parameter_id = ${hb.id}`;
+    const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
+    expect(report.tests[0].lines[0]).toMatchObject({ referenceText: "12 - 15", flag: "critical_low" });
+    await owner`update app.lab_parameter_ranges set low = 12 where parameter_id = ${hb.id} and sex = 'female'`;
+    await owner`update app.lab_parameter_ranges set low = 13 where parameter_id = ${hb.id} and sex = 'male'`;
+
+    const letterhead = { name: "Clinic", addressLine: null, city: null, phone: null, email: null, letterheadText: null, footerText: null };
+    const pdf = await renderLabReportPdf(report, letterhead, TZ);
+    expect(Buffer.from(pdf.slice(0, 5)).toString()).toBe("%PDF-");
+
+    const history = await asDoctor()((tx) => patientLabHistory(tx, patientId, TZ));
+    expect(history.tests[0].rows.map((r) => r.name)).toContain("Haemoglobin");
+  });
+
+  it("keeps the single free-text result for tests with no parameters", async () => {
+    const [custom] = await asAdmin()((tx) => tx.insert(labTests).values({ clinicId: clinic.clinicId, name: "Custom culture" }).returning({ id: labTests.id }));
+    const { encounterId } = await female("Radha");
+    const order = await asDoctor()((tx) => orderLab(tx, clinic.clinicId, encounterId, custom.id, undefined, doctorId));
+    expect(await fieldsOf(order.id, "female", 34, custom.id)).toEqual([]);
+    await asLab()((tx) => enterResult(tx, order.id, { value: "No growth", flag: "normal" }, labId));
+    const report = (await asDoctor()((tx) => labReport(tx, encounterId, today)))!;
+    expect(report.tests[0].single?.value).toBe("No growth");
+  });
+
+  it("the clinic can change a test's parameters and ranges", async () => {
+    const testId = await cbc();
+    const row = await asAdmin()((tx) => saveLabParameter(tx, clinic.clinicId, null, { testId, name: "Reticulocytes", unit: "%", valueType: "number", sortOrder: 99 }));
+    await expect(asAdmin()((tx) => saveLabRange(tx, clinic.clinicId, { parameterId: row.id, sex: "any", ageMinYears: 0, ageMaxYears: null, low: 3, high: 1 }))).rejects.toThrow(/Low cannot be above/);
+    await expect(asAdmin()((tx) => saveLabRange(tx, clinic.clinicId, { parameterId: row.id, sex: "any", ageMinYears: 0, ageMaxYears: null }))).rejects.toThrow(/low or a high/);
+    const range = await asAdmin()((tx) => saveLabRange(tx, clinic.clinicId, { parameterId: row.id, sex: "any", ageMinYears: 0, ageMaxYears: null, low: 0.5, high: 2.5 }));
+    const test = await asAdmin()((tx) => getLabTestWithParameters(tx, testId));
+    expect(test?.parameters.find((p) => p.id === row.id)?.ranges).toHaveLength(1);
+    await asAdmin()((tx) => deleteLabRange(tx, range.id));
   });
 });
 

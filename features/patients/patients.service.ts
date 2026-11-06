@@ -210,6 +210,18 @@ export async function updatePatient(tx: Tx, id: string, input: PatientInput, act
   return { wasPlaceholder: current.isPlaceholder };
 }
 
+export type PatientContact = { mobile?: string; altPhone?: string; email?: string; addressLine?: string; city?: string };
+
+/** Contact details only: identity stays with registration. */
+export async function updatePatientContact(tx: Tx, id: string, input: PatientContact) {
+  const [row] = await tx
+    .update(patients)
+    .set({ mobile: input.mobile ?? null, altPhone: input.altPhone ?? null, email: input.email ?? null, addressLine: input.addressLine ?? null, city: input.city ?? null, updatedAt: new Date() })
+    .where(eq(patients.id, id))
+    .returning({ id: patients.id });
+  if (!row) throw new AppError("Patient not found.");
+}
+
 export async function getPatient(tx: Tx, id: string, today: string) {
   const [row] = await tx.select().from(patients).where(eq(patients.id, id)).limit(1);
   if (!row) return null;

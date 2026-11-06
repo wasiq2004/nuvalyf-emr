@@ -17,6 +17,7 @@ export const PERMISSIONS = {
   // Patients & front desk
   "patient:read": { label: "View patient records (demographics)", group: "Patients", adjustable: true },
   "patient:write": { label: "Register and update patients", group: "Patients", adjustable: true },
+  "patient:contact": { label: "Update patient contact details", group: "Patients", adjustable: true },
   "emergency:admit": { label: "Admit an emergency", group: "Patients", adjustable: true },
   "appointment:read": { label: "View appointments", group: "Appointments", adjustable: true },
   "appointment:manage": { label: "Book, move and cancel appointments", group: "Appointments", adjustable: true },
@@ -59,6 +60,13 @@ export const PERMISSIONS = {
   "import:run": { label: "Import patient registers", group: "Administration", adjustable: true },
   "broadcast:send": { label: "Send WhatsApp broadcasts", group: "Administration", module: "whatsapp", adjustable: true },
   "reports:read": { label: "View reports", group: "Administration", module: "reports", adjustable: true },
+
+  // Inpatient
+  "inpatient:read": { label: "View admissions and beds", group: "Inpatient", module: "inpatient", adjustable: true },
+  "inpatient:admit": { label: "Admit, move and discharge patients", group: "Inpatient", module: "inpatient", adjustable: true },
+  "inpatient:bill": { label: "Add charges and take payments", group: "Inpatient", module: "inpatient", adjustable: true },
+  "inpatient:adjust": { label: "Change bed hours, rates and discounts on a bill", group: "Inpatient", module: "inpatient", adjustable: true },
+  "discharge:sign": { label: "Sign discharge summaries", group: "Inpatient", module: "inpatient", adjustable: false },
 
   // Analytics & compliance
   "analytics:read": { label: "View de-identified analytics", group: "Analytics", module: "analytics", adjustable: true },

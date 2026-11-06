@@ -141,6 +141,34 @@
       "when": 1793648245241,
       "tag": "0019_grant_pharmacy_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793949296846,
+      "tag": "0020_pharmacy_dispensing_copy",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793949963749,
+      "tag": "0021_triage_notes_and_contact",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793950740886,
+      "tag": "0022_lab_parameters_and_results",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793951404478,
+      "tag": "0023_inpatient",
+      "breakpoints": true
     }
   ]
 }

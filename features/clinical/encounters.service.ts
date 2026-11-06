@@ -20,6 +20,7 @@ import {
 import { AppError } from "@/lib/errors";
 import { ageOn, displayPatientName } from "@/features/patients/patient-rules";
 import { listQueue, type QueueItem } from "@/features/queue/queue.service";
+import { latestVitalsFor, type VitalsEntry } from "./vitals.service";
 
 export function staffName(u: { title?: string | null; firstName: string; lastName: string }) {
   return [u.title, u.firstName, u.lastName].filter(Boolean).join(" ");
@@ -124,18 +125,22 @@ export async function callNext(tx: Tx, clinicId: string, doctorId: string, today
   return callPatient(tx, clinicId, next.id, doctorId, today);
 }
 
-export type ClinicalQueueItem = QueueItem & { encounterId: string | null };
+export type ClinicalQueueItem = QueueItem & { encounterId: string | null; chiefComplaint: string | null; latestVitals: VitalsEntry | null };
 
-/** Today's queue with each visit's consultation (if it has one). */
+/** Today's queue with each visit's consultation and its latest vitals, so the doctor sees them before calling. */
 export async function listClinicalQueue(tx: Tx, today: string): Promise<ClinicalQueueItem[]> {
   const queue = await listQueue(tx, today);
   if (queue.length === 0) return [];
   const rows = await tx
-    .select({ id: encounters.id, visitId: encounters.visitId })
+    .select({ id: encounters.id, visitId: encounters.visitId, chiefComplaint: encounters.chiefComplaint })
     .from(encounters)
     .where(inArray(encounters.visitId, queue.map((q) => q.id)));
-  const byVisit = new Map(rows.map((r) => [r.visitId, r.id]));
-  return queue.map((q) => ({ ...q, encounterId: byVisit.get(q.id) ?? null }));
+  const byVisit = new Map(rows.map((r) => [r.visitId, r]));
+  const latest = await latestVitalsFor(tx, rows.map((r) => r.id));
+  return queue.map((q) => {
+    const row = byVisit.get(q.id);
+    return { ...q, encounterId: row?.id ?? null, chiefComplaint: row?.chiefComplaint ?? null, latestVitals: row ? (latest.get(row.id) ?? null) : null };
+  });
 }
 
 /** Patients this doctor finished today. */
@@ -208,10 +213,11 @@ export async function getEncounterCore(tx: Tx, id: string, today: string) {
       specialty: users.specialty,
     })
     .from(users)
-    .where(inArray(users.id, [row.encounter.doctorId, row.encounter.finalizedBy].filter((v): v is string => Boolean(v))));
+    .where(inArray(users.id, [row.encounter.doctorId, row.encounter.finalizedBy, row.encounter.triageNotesBy].filter((v): v is string => Boolean(v))));
   const byId = new Map(people.map((p) => [p.id, p]));
   const doctor = row.encounter.doctorId ? byId.get(row.encounter.doctorId) : undefined;
   const finalizer = row.encounter.finalizedBy ? byId.get(row.encounter.finalizedBy) : undefined;
+  const triageBy = row.encounter.triageNotesBy ? byId.get(row.encounter.triageNotesBy) : undefined;
 
   return {
     encounter: row.encounter,
@@ -219,7 +225,22 @@ export async function getEncounterCore(tx: Tx, id: string, today: string) {
     patient: { ...row.patient, name: displayPatientName(row.patient), age: ageOn(row.patient, today) },
     doctor: doctor ? { ...doctor, name: staffName(doctor) } : null,
     finalizedByName: finalizer ? staffName(finalizer) : null,
+    triageNotesByName: triageBy ? staffName(triageBy) : null,
   };
+}
+
+/**
+ * Triage: the care team may set the chief complaint and nursing notes while
+ * the consultation is open. The doctor's history, examination, plan,
+ * diagnoses and prescription stay the doctor's alone.
+ */
+export async function saveTriageNotes(tx: Tx, encounterId: string, input: { chiefComplaint?: string; nursingNotes?: string }, userId: string) {
+  const encounter = await requireOpenEncounter(tx, encounterId);
+  await tx
+    .update(encounters)
+    .set({ chiefComplaint: input.chiefComplaint ?? null, nursingNotes: input.nursingNotes ?? null, triageNotesBy: userId, triageNotesAt: new Date(), updatedAt: new Date() })
+    .where(eq(encounters.id, encounterId));
+  return { patientId: encounter.patientId };
 }
 
 export async function saveNotes(

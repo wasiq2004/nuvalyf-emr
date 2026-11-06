@@ -7,6 +7,7 @@ import "server-only";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { formatMoney, fromMinor, toMinor } from "@/lib/money";
 import { describeQuantity, unitWord } from "@/features/pharmacy/selling-rules";
+import { dosageText } from "@/features/pharmacy/dispensing-rules";
 import { ACCENT, Letter, MARGIN, MUTED, type Letterhead } from "./letter";
 
 /** The pharmacy's registration, printed under the letterhead. */
@@ -37,6 +38,8 @@ type Line = {
   quantity: string;
   rate: string | null;
   amount: string;
+  /** How to take it, as dispensed. */
+  dosage?: string;
   /** Null on sales from before GST. */
   taxable: string | null;
   cgst: string;
@@ -101,7 +104,8 @@ async function renderDocument(doc: Document, clinic: Letterhead, pharmacy: Pharm
     const top = pdf.y;
     const baseline = top - 10;
     pdf.text(item.description, { size: 9.5, width: nameWidth, gap: 2 });
-    pdf.text(`Batch ${item.batchNo} · Exp ${formatDate(item.expiryDate, "UTC")}`, { size: 7.5, color: MUTED, width: nameWidth, gap: 4 });
+    pdf.text(`Batch ${item.batchNo} · Exp ${formatDate(item.expiryDate, "UTC")}`, { size: 7.5, color: MUTED, width: nameWidth, gap: item.dosage ? 2 : 4 });
+    if (item.dosage) pdf.text(item.dosage, { size: 8, width: nameWidth, gap: 4 });
     const after = pdf.y;
     if (withTax && item.hsn) pdf.page.drawText(pdf.safe(item.hsn), { x: hsnX, y: baseline, size: 8.5, font: pdf.regular });
     pdf.wrap(item.quantity, 8.5, rateEdge - qtyX - 52).forEach((line, i) => pdf.page.drawText(line, { x: qtyX, y: baseline - i * 10, size: 8.5, font: pdf.regular }));
@@ -205,6 +209,10 @@ export type SaleForPdf = {
     cgst: string;
     sgst: string;
     igst: string;
+    dose: string | null;
+    frequency: string | null;
+    durationDays: number | null;
+    instructions: string | null;
   }[];
 };
 
@@ -260,6 +268,7 @@ export async function renderSalePdf(sale: SaleForPdf, clinic: Letterhead, pharma
         quantity: describeQuantity(i, i.form),
         rate: i.unitPrice,
         amount: i.amount,
+        dosage: dosageText(i) || undefined,
         taxable: i.taxable,
         cgst: i.cgst,
         sgst: i.sgst,

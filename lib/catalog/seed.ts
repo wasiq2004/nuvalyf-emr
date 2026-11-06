@@ -14,6 +14,8 @@ import {
   drugAllergyClasses,
   drugInteractions,
   drugs,
+  labParameterRanges,
+  labTestParameters,
   labTests,
   prescribingPresets,
   vitalRanges,
@@ -28,8 +30,9 @@ import {
   STARTER_VITAL_RANGES,
   vitalRangeKey,
 } from "./starter";
+import { STARTER_LAB_PARAMETERS } from "./starter-lab";
 
-export const CATALOG_SECTIONS = ["drugs", "allergyClasses", "interactions", "presets", "diagnoses", "vitalRanges", "labTests"] as const;
+export const CATALOG_SECTIONS = ["drugs", "allergyClasses", "interactions", "presets", "diagnoses", "vitalRanges", "labTests", "labParameters"] as const;
 export type CatalogSection = (typeof CATALOG_SECTIONS)[number];
 
 type StarterKeys = Record<CatalogSection, string[]>;
@@ -43,6 +46,7 @@ function starterKeys(): StarterKeys {
     diagnoses: STARTER_DIAGNOSES.map((d) => d.code),
     vitalRanges: STARTER_VITAL_RANGES.map(vitalRangeKey),
     labTests: STARTER_LAB_TESTS.map((t) => t.key),
+    labParameters: Object.entries(STARTER_LAB_PARAMETERS).flatMap(([test, params]) => params.map((p) => `${test}:${p.key}`)),
   };
 }
 
@@ -54,6 +58,7 @@ const TABLES = {
   diagnoses: diagnosisCodes,
   vitalRanges,
   labTests,
+  labParameters: labTestParameters,
 } as const;
 
 async function existingKeys(tx: Tx, clinicId: string): Promise<Record<CatalogSection, Set<string>>> {
@@ -209,6 +214,53 @@ export async function importStarterCatalog(tx: Tx, clinicId: string): Promise<Re
     );
     added.labTests = newTests.length;
   }
+  added.labParameters = await importLabParameters(tx, clinicId);
 
   return added;
+}
+
+/**
+ * What each starter test reports. A test the clinic has already given its own
+ * parameters is left alone, as is anything it edited or deactivated.
+ */
+async function importLabParameters(tx: Tx, clinicId: string) {
+  const tests = await tx.select({ id: labTests.id, starterKey: labTests.starterKey }).from(labTests).where(and(eq(labTests.clinicId, clinicId), isNotNull(labTests.starterKey)));
+  const existing = new Set((await tx.select({ testId: labTestParameters.testId }).from(labTestParameters).where(eq(labTestParameters.clinicId, clinicId))).map((p) => p.testId));
+  let count = 0;
+  for (const test of tests) {
+    const params = STARTER_LAB_PARAMETERS[test.starterKey ?? ""];
+    if (!params || existing.has(test.id)) continue;
+    const rows = await tx
+      .insert(labTestParameters)
+      .values(
+        params.map((p, i) => ({
+          clinicId,
+          testId: test.id,
+          starterKey: `${test.starterKey}:${p.key}`,
+          name: p.name,
+          section: p.section ?? null,
+          unit: p.unit || null,
+          valueType: p.text ? "text" : "number",
+          normalText: p.normal ?? null,
+          sortOrder: i,
+        })),
+      )
+      .returning({ id: labTestParameters.id });
+    const ranges = params.flatMap((p, i) =>
+      (p.ranges ?? []).map((r) => ({
+        clinicId,
+        parameterId: rows[i].id,
+        sex: r.sex ?? "any",
+        ageMinYears: r.ageMin ?? 0,
+        ageMaxYears: r.ageMax ?? null,
+        low: num(r.low),
+        high: num(r.high),
+        criticalLow: num(r.criticalLow),
+        criticalHigh: num(r.criticalHigh),
+      })),
+    );
+    if (ranges.length) await tx.insert(labParameterRanges).values(ranges);
+    count += rows.length;
+  }
+  return count;
 }

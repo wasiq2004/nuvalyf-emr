@@ -15,6 +15,7 @@ import { nextCounter } from "@/features/patients/patients.service";
 import { staffName } from "@/features/clinical/encounters.service";
 import { counterKey, documentNumber, fiscalYear } from "./numbering";
 import { addValues, emptyValue, returnValue, returnable, type LineValue } from "./return-rules";
+import { addSourceCharge, chargeForSource } from "@/features/inpatient/inpatient.service";
 import { moveStock } from "./stock.service";
 import { getSale, refreshDispenseStatus } from "./sales.service";
 
@@ -139,6 +140,11 @@ export async function createSaleReturn(tx: Tx, clinicId: string, input: SaleRetu
       await moveStock(tx, clinicId, { drugId: l.item.drugId, batchId: l.item.batchId, change: l.units, reason: "return", sourceType: "sale_return", sourceId: note.id }, actorId);
     }
     if (sale.prescriptionId) await refreshDispenseStatus(tx, sale.prescriptionId);
+
+    if (sale.method === "inpatient") {
+      const original = await chargeForSource(tx, "pharmacy_sale", sale.id);
+      if (original) await addSourceCharge(tx, clinicId, original.admissionId, { kind: "pharmacy", description: `Returned on ${number}`, amount: fromMinor(-refund), sourceType: "sale_return", sourceId: note.id }, actorId);
+    }
 
     return { returnId: note.id, number, saleNumber: sale.number, refund: fromMinor(refund), refundMethod: sale.method === "credit" ? "account" : sale.method, units: lines.reduce((n, l) => n + l.units, 0) };
   });

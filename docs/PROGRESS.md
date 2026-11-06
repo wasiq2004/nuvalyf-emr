@@ -205,7 +205,7 @@ Security
 - [x] Independent security review against the plan's guarantees: 10 findings, all fixed and tested (`security-hardening` unit + integration). Table in [SECURITY.md](SECURITY.md#phase-10-security-review)
   - Session versions need a server-minted HMAC proof (`lib/auth/session-proof.ts`); clinic sessions capped at 8 h from sign-in
   - Client IP from the right of `X-Forwarded-For` (`TRUST_PROXY_HOPS`); password-change rate limits
-  - Consultation ownership with audited take-over; Analyst role limited to `analytics:*`; no dispensing beyond the prescribed course
+  - Consultation ownership with audited take-over; Analyst role limited to `analytics:*`; no dispensing beyond the prescribed course (reversed by client decision on 2026-11-06, see PHARMACY_DISPENSING.md)
   - `describeError` keeps query parameters out of logs; console tenant page uses the provisioner pool only for Platform Admins
   - Analytics: whole months, 5-year age steps, k-anonymous export rows, escaped CSV header
 - [x] Content Security Policy with a per-request nonce (`lib/csp.ts`, `proxy.ts`); e2e asserts no violations on every screen
@@ -271,12 +271,25 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 - [x] **Indian medicine list** (client choice: the public scraped "A-Z Medicine Dataset of India", licensing risk acknowledged): 2,53,973 brands in a shared read-only `ref.medicines` table, loaded on deploy from `db/reference/indian-medicines.csv.gz` only when the file changes. Pack labels and compositions become form, units per pack, generic name and strength. Searchable from the catalogue ("Add from Indian medicine list") and on supplier bills; adding copies an entry into the clinic's list once (linked by `reference_id`), never its dated MRP. Migrations 0016 (pg_trgm) and 0017
 - Deferred, to decide with the client: photographing a bill to fill the form automatically
 
+## Client request: pharmacy copy, nurse updates, suggestions, lab reports, inpatient ✅
+
+- [x] **Pharmacy** ([PHARMACY_DISPENSING.md](PHARMACY_DISPENSING.md)): find a patient's prescription by name, phone or record number; dose, days, quantity and medicines editable with no doctor approval; part fills stay open; the doctor's signed copy never changes and the doctor sees what was given
+- [x] **Nurse**: chief complaint, nursing notes and contact details in triage (new `patient:contact`); prescription read-only; latest vitals with time and who took them on the doctor's queue
+- [x] **Doctor suggestions**: own frequent medicines with usual dose, frequent diagnoses and lab tests, what they usually give for today's diagnosis, repeat last prescription; a new doctor sees the clinic's
+- [x] **Lab reports** ([LAB_REPORTS.md](LAB_REPORTS.md)): parameters per test, age and sex ranges, automatic flags, printable report, results by date with trend charts, editable per clinic
+- [x] **Inpatient** ([INPATIENT_DESIGN.md](INPATIENT_DESIGN.md)): bed categories and beds, admissions, bed moves, running bill with hourly or 24-hour-block charging, advances and part payments, pharmacy and lab on the bill, discharge summary drafted from the record
+- [x] Migrations 0020 to 0023; tests: 1,374 unit, 197 integration, 26 e2e scenarios
+- Fixed along the way: line breaks printed as "?" in every PDF; two random failures in the analytics tests
+
 ---
 
 ## Decisions log
 
 | Date | Decision |
 |---|---|
+| 2026-11-06 | Pharmacist may change dose, days, quantity and medicines with no doctor approval; removes the course limit |
+| 2026-11-06 | Bed billing: by the hour, or full 24-hour blocks when the toggle is off; minimum 24 hours, part hours round up (minimum and rounding to be confirmed with the client) |
+| 2026-11-06 | Discharge summary is issued with the balance shown, never held for payment |
 | 2026-10-16 | D1: patient portal kept but hidden; v1 portal code parked in `legacy/v1` |
 | 2026-10-16 | D6: basic starter medicine list, everything customizable per clinic |
 | 2026-10-16 | No `FORCE ROW LEVEL SECURITY`: the owner role is migration-only, and platform usage counts come from owner-defined views |

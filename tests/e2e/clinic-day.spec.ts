@@ -48,7 +48,7 @@ test("Super Admin onboards a clinic", async ({ page }) => {
   await page.goto("/platform/plans");
   await page.getByRole("button", { name: "New plan" }).click();
   await page.getByLabel("Name").fill(`E2E Full ${suffix}`);
-  for (const key of ["pharmacy", "lab", "whatsapp", "reports", "analytics"]) {
+  for (const key of ["pharmacy", "lab", "inpatient", "whatsapp", "reports", "analytics"]) {
     await page.locator(`input[name="modules[]"][value="${key}"]`).check();
   }
   await page.getByRole("button", { name: "Create plan" }).click();
@@ -213,6 +213,19 @@ test("Nurse triages: flagged vitals, an allergy, then hands over", async () => {
   await page.getByLabel("Diastolic BP (mmHg)").fill("92");
   await page.getByRole("button", { name: "Save vitals" }).click();
   await expect(page.getByText(/Vitals recorded\. Flagged: Temperature high/)).toBeVisible();
+  await expect(page.getByText(/Updated Just now/)).toBeVisible();
+
+  // Notes for the doctor, and contact details; no access to anything the doctor writes.
+  await page.getByLabel("Chief complaint").fill("Fever and sore throat");
+  await page.getByLabel("Nursing notes").fill("Came in shivering");
+  await page.getByRole("button", { name: "Save triage notes" }).click();
+  await expect(page.getByText("Triage notes saved")).toBeVisible();
+  await page.getByRole("button", { name: "Update contact" }).click();
+  await page.getByRole("dialog").getByLabel("City").fill("Chennai");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Contact details saved")).toBeVisible();
+  await expect(page.getByLabel("History")).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search medicines" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Add allergy" }).click();
   await page.getByLabel("Substance").fill("Penicillin");
@@ -230,9 +243,15 @@ test("Doctor is warned about the allergy, prescribes, orders a test and signs", 
   const page = doctorPage;
   await clinicFirstSignIn(page, clinicCode, accounts.doctor.email, accounts.doctor.otp, accounts.doctor.password);
   await expect(page.getByRole("heading", { name: "Your queue" })).toBeVisible();
+  // The nurse's readings are on the queue before the patient is called.
+  await expect(page.getByText("BP 150/92")).toBeVisible();
+  await expect(page.getByText(/Updated .* by /).first()).toBeVisible();
+  await expect(page.getByText("Fever and sore throat")).toBeVisible();
   await page.getByRole("button", { name: `Call ${patientName}` }).click();
   await page.waitForURL(encounterUrl);
   await expect(page.getByLabel("Allergies").first()).toContainText("Penicillin");
+  await expect(page.getByText("Came in shivering")).toBeVisible();
+  await expect(page.getByLabel("Chief complaint")).toHaveValue("Fever and sore throat");
 
   await page.getByLabel("Chief complaint").fill("Sore throat and fever for two days");
   await page.getByRole("button", { name: "Save notes" }).click();
@@ -271,15 +290,53 @@ test("Doctor is warned about the allergy, prescribes, orders a test and signs", 
   expect((await pdf.body()).subarray(0, 4).toString()).toBe("%PDF");
 });
 
+test("The next consultation offers what this doctor usually writes", async () => {
+  const page = doctorPage;
+  await page.goto("/today");
+  await page.getByRole("button", { name: /Call Unknown male/ }).click();
+  await page.waitForURL(/\/encounters\/[0-9a-f-]+$/);
+  await expect(page.getByText("Frequently used")).toBeVisible();
+  await expect(page.getByRole("button", { name: /J02\.9/ })).toBeVisible();
+  await expect(page.getByText("Frequently ordered")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Haemoglobin", exact: true })).toBeVisible();
+
+  // A suggestion fills the form and still goes through the safety check.
+  await expect(page.getByText("Frequently prescribed")).toBeVisible();
+  await page.getByRole("button", { name: /Paracetamol 650/ }).click();
+  await expect(page.getByText("No allergy or interaction found")).toBeVisible();
+  await expect(page.locator('input[name="dose"]')).not.toHaveValue("");
+  await page.getByRole("button", { name: "Choose another medicine" }).click();
+});
+
+test("Nurse can read the signed prescription but not change it", async () => {
+  const page = nursePage;
+  await page.goto(encounterUrl);
+  await expect(page.getByText("1. Paracetamol 650")).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search medicines" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add to prescription" })).toHaveCount(0);
+});
+
 test("Lab technician enters the result; it waits on the doctor's screen until read", async () => {
   const page = labPage;
   await clinicFirstSignIn(page, clinicCode, accounts.lab.email, accounts.lab.otp, accounts.lab.password, "**/lab");
   await expect(page.getByRole("cell", { name: "Haemoglobin" })).toBeVisible();
   await page.getByRole("button", { name: "Enter result" }).click();
-  await page.getByLabel(/^Result/).fill("10.2");
-  await page.getByLabel("Interpretation").selectOption("abnormal");
+
+  // The test's own parameter, checked against this patient's range as it is typed.
+  await expect(page.getByRole("dialog").getByText("12 - 15")).toBeVisible();
+  await page.getByLabel("Haemoglobin result").fill("10.2");
+  await expect(page.getByRole("dialog").getByText("Low", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save result" }).click();
   await expect(page.getByText("Result sent to the doctor")).toBeVisible();
+
+  // A printable report, and the history; a lab technician has no consultation access.
+  const report = await page.request.get(`/lab/report/${new URL(encounterUrl).pathname.split("/").pop()}`);
+  expect(report.status()).toBe(200);
+  expect(report.headers()["content-type"]).toContain("application/pdf");
+  await page.getByRole("link", { name: "History" }).click();
+  await page.waitForURL(/\/lab\/patients\/[0-9a-f-]+$/);
+  await expect(page.getByRole("rowheader", { name: /Haemoglobin/ })).toContainText("g/dL");
+  await expect(page.getByRole("cell", { name: "10.2 L" })).toBeVisible();
 
   await doctorPage.goto("/today");
   const unread = doctorPage.locator("section", { has: doctorPage.getByRole("heading", { name: "Unread results" }) });
@@ -358,15 +415,33 @@ test("Pharmacist stocks the shelf, fills the prescription once, and sells over t
   await page.locator("tr", { hasText: patientName }).getByRole("link", { name: "Fill" }).click();
   await expect(page.getByLabel("Allergies")).toContainText("Penicillin");
   await expect(page.getByLabel("Quantity of Paracetamol 650")).toHaveValue("9");
+
+  // The patient buys 2 of the 3 days: the quantity follows the days.
+  await page.getByLabel("Days of Paracetamol 650").fill("2");
+  await expect(page.getByLabel("Quantity of Paracetamol 650")).toHaveValue("6");
+  await expect(page.getByText("3 left on the prescription for a later visit.")).toBeVisible();
+  await page.getByLabel("Note on any change").fill("Buying the rest later");
   await page.getByRole("button", { name: /Dispense & take/ }).dblclick();
   await page.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
-  // 9 x ₹2.50 = ₹22.50, rounded to the rupee on the bill.
-  await expect(page.getByRole("heading", { name: "₹23.00" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "₹15.00" })).toBeVisible();
+  await expect(page.getByText("Dosage changed")).toBeVisible();
+  await expect(page.getByText(/Doctor wrote Paracetamol 650/)).toBeVisible();
+
+  // Back later, giving their name: the last day is still open. 3 x ₹2.50 rounds to ₹8.
+  await page.goto(`/pharmacy?q=${encodeURIComponent(patientName)}`);
+  const found = page.locator("section", { has: page.getByRole("heading", { name: /^Prescriptions for/ }) });
+  await expect(found.locator("tr", { hasText: patientName })).toContainText("Part filled");
+  await found.getByRole("link", { name: "Fill" }).click();
+  await expect(page.getByRole("heading", { name: "Given so far" })).toBeVisible();
+  await expect(page.getByLabel("Quantity of Paracetamol 650")).toHaveValue("3");
+  await page.getByRole("button", { name: /Dispense & take/ }).click();
+  await page.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
+  await expect(page.getByRole("heading", { name: "₹8.00" })).toBeVisible();
 
   await page.goto("/pharmacy");
   await expect(page.locator("tr", { hasText: patientName })).toHaveCount(0);
   const sales = page.locator("section", { has: page.getByRole("heading", { name: "Today's sales" }) }).locator("li");
-  await expect(sales).toHaveCount(1);
+  await expect(sales).toHaveCount(2);
 
   // Over the counter.
   await page.getByRole("link", { name: "New sale" }).click();
@@ -576,6 +651,89 @@ test("Pharmacist sends stock back to the supplier, plans a reorder and prints sh
   const href = await page.getByRole("link", { name: "Labels PDF" }).getAttribute("href");
   const labels = await page.request.get(href!);
   expect(labels.headers()["content-type"]).toContain("application/pdf");
+});
+
+test("Inpatient: beds set up, patient admitted, part payment, discharge and a signed summary with the balance shown", async () => {
+  // The Clinic Admin sets up beds and leaves hourly billing on.
+  const admin = adminPage;
+  await admin.goto("/settings/inpatient");
+  await admin.getByRole("button", { name: "Add category" }).click();
+  await admin.getByRole("dialog").getByLabel("Name").fill("General");
+  await admin.getByRole("dialog").getByLabel("Price per day").fill("2400");
+  await admin.getByRole("button", { name: "Save category" }).click();
+  await expect(admin.getByText("Category saved")).toBeVisible();
+  await admin.getByRole("button", { name: "Add bed" }).click();
+  await admin.getByRole("dialog").getByLabel("Bed number").fill("A-1");
+  await admin.getByRole("dialog").getByLabel("Ward").fill("Ward A");
+  await admin.getByRole("dialog").getByLabel("Category").selectOption({ label: "General" });
+  await admin.getByRole("button", { name: "Save bed" }).click();
+  await expect(admin.getByText("Bed saved")).toBeVisible();
+  await admin.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(admin.getByText("Inpatient settings saved")).toBeVisible();
+
+  // Reception admits a patient, backdated so the charge is visible straight away.
+  const desk = deskPage;
+  await desk.goto(`/inpatient?q=${encodeURIComponent(patientName)}`);
+  await desk.getByRole("link", { name: "Admit" }).first().click();
+  await desk.waitForURL(/\/inpatient\/admit/);
+  await desk.getByLabel("Reason for admission").fill("Dengue with low platelets");
+  await desk.getByLabel("Consultant").selectOption({ index: 1 });
+  await desk.getByLabel("Bed").selectOption({ index: 1 });
+  await desk.getByRole("button", { name: "Admit patient" }).click();
+  await desk.waitForURL(/\/inpatient\/[0-9a-f-]+$/);
+  const stayUrl = desk.url();
+  await expect(desk.getByText("24 h (1 day)")).toBeVisible();
+  await expect(desk.getByText("₹2,400.00").first()).toBeVisible();
+
+  // Advance, then a charge.
+  await desk.getByRole("button", { name: "Take payment" }).click();
+  await desk.getByRole("dialog").getByLabel("Amount").fill("1000");
+  await desk.getByRole("dialog").getByRole("button", { name: "Record" }).dblclick();
+  await expect(desk.getByText("Payment recorded")).toBeVisible();
+  await desk.getByRole("button", { name: "Add charge" }).click();
+  await desk.getByRole("dialog").getByLabel("Description").fill("Consultant round");
+  await desk.getByRole("dialog").getByLabel("Amount each").fill("500");
+  await desk.getByRole("dialog").getByRole("button", { name: "Add charge" }).click();
+  await expect(desk.getByText("Charge added")).toBeVisible();
+  await desk.reload();
+  await expect(desk.getByText("₹1,900.00").first()).toBeVisible(); // 2,400 + 500 - 1,000
+
+  // Not in the outpatient queue.
+  await desk.goto("/queue");
+  await expect(desk.getByRole("link", { name: patientName })).toHaveCount(0);
+
+  // The pharmacy charges a medicine to the stay.
+  await pharmPage.goto("/pharmacy/sale");
+  await pharmPage.getByRole("searchbox", { name: "Search stock" }).fill("Paracetamol 650");
+  await pharmPage.getByRole("button", { name: /Paracetamol 650/ }).click();
+  await pharmPage.getByLabel("Paid by").selectOption("inpatient");
+  await pharmPage.getByLabel("Admitted patient").selectOption({ index: 1 });
+  await pharmPage.getByRole("button", { name: "Complete sale" }).click();
+  await pharmPage.waitForURL(/\/pharmacy\/sales\/[0-9a-f-]+$/);
+  await expect(pharmPage.getByText(/On the inpatient bill/)).toBeVisible();
+
+  // Discharged with a balance due: nothing is held back.
+  await desk.goto(stayUrl);
+  await expect(desk.getByText(/Pharmacy S\//)).toBeVisible();
+  await desk.getByRole("button", { name: "Discharge" }).click();
+  await expect(desk.getByRole("dialog")).toContainText("is still due");
+  await desk.getByRole("dialog").getByRole("button", { name: "Discharge patient" }).click();
+  await expect(desk.getByText("Patient discharged")).toBeVisible();
+  const bill = await desk.request.get(`${stayUrl}/bill`);
+  expect(bill.headers()["content-type"]).toContain("application/pdf");
+
+  // The doctor reviews the draft and signs.
+  const doctor = doctorPage;
+  await doctor.goto(`${stayUrl}/summary`);
+  await doctor.getByRole("button", { name: "Draft from the record" }).click();
+  await expect(doctor.getByLabel("Reason for admission")).toHaveValue("Dengue with low platelets");
+  await doctor.getByRole("button", { name: "Sign & lock" }).click();
+  await expect(doctor.getByText(/Fill in before signing: Condition at discharge/)).toBeVisible();
+  await doctor.getByLabel("Condition at discharge").fill("Stable, platelets rising");
+  await doctor.getByRole("button", { name: "Sign & lock" }).click();
+  await expect(doctor.getByText(/This summary can no longer be changed/)).toBeVisible();
+  const summary = await doctor.request.get(`${stayUrl}/summary/pdf`);
+  expect(summary.headers()["content-type"]).toContain("application/pdf");
 });
 
 test("Auditor sees who opened a record, and cannot reach any patient screen", async () => {

@@ -89,7 +89,7 @@ export default async function TodayPage() {
         {isDoctor ? (
           <DoctorDay userId={ctx.userId} queue={clinical.queue} seenToday={clinical.seenToday} unread={clinical.unread} queries={clinical.queries} showLab={showLab} timezone={ctx.timezone} now={now} />
         ) : (
-          <NurseDay queue={clinical.queue} now={now} />
+          <NurseDay queue={clinical.queue} timezone={ctx.timezone} now={now} />
         )}
       </PageShell>
     );

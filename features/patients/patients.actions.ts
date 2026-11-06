@@ -3,11 +3,11 @@
 import { z } from "zod";
 import { clinicAction } from "@/lib/auth/actions";
 import { AppError } from "@/lib/errors";
-import { idField, optionalId, optionalPhone, requiredText } from "@/lib/validation";
+import { idField, optionalEmail, optionalId, optionalPhone, optionalText, requiredText } from "@/lib/validation";
 import { todayInTimeZone } from "@/lib/time";
 import { identitySchema, patientSchema, sexField } from "./patient.schema";
 import { issueDuplicateToken, verifyDuplicateToken } from "./duplicate-token";
-import { admitEmergency, findDuplicateCandidates, registerPatient, searchPatients, updatePatient } from "./patients.service";
+import { admitEmergency, findDuplicateCandidates, registerPatient, searchPatients, updatePatient, updatePatientContact } from "./patients.service";
 
 export const searchPatientsAction = clinicAction(
   { name: "patients.search", permission: "patient:read", schema: z.object({ q: z.string().trim().max(100).default("") }) },
@@ -112,6 +112,19 @@ export const updatePatientAction = clinicAction(
       });
     });
   },
+);
+
+export const updatePatientContactAction = clinicAction(
+  {
+    name: "patients.updateContact",
+    permission: "patient:contact",
+    schema: z.object({ id: idField, mobile: optionalPhone, altPhone: optionalPhone, email: optionalEmail, addressLine: optionalText(300), city: optionalText(100) }),
+  },
+  async ({ db, audit }, { id, ...contact }) =>
+    db(async (tx) => {
+      await updatePatientContact(tx, id, contact);
+      await audit(tx, { action: "PATIENT_CONTACT_UPDATED", targetType: "patient", targetId: id, patientId: id });
+    }),
 );
 
 export const admitEmergencyAction = clinicAction(

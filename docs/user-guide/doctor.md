@@ -38,6 +38,18 @@ After signing:
 
 Only the doctor who opened a consultation can edit it. If a colleague is unavailable, open their consultation and click **Take over**. This is recorded in the audit trail.
 
+## Suggestions
+
+While you write a consultation, NuvaLyf shows what you use most: **Frequently used** diagnoses, **Frequently ordered** lab tests, **Frequently prescribed** medicines with your usual dose, and what you usually give for today's diagnosis. Clicking a medicine fills the form, and the allergy and interaction check still runs. **Repeat** copies the patient's last prescription, leaving out anything with a serious warning.
+
+## What the pharmacy gave
+
+The pharmacist may change the days, dose or medicine. Your prescription stays as you signed it; **Given by the pharmacy** on the consultation shows what the patient actually received.
+
+## Admitted patients
+
+**Inpatients** shows who is in which bed. Use **Vitals & notes** on an admission for the consultation screen. **Discharge summary** drafts itself from the record: review it, write **Condition at discharge**, then **Sign & lock**. A signed summary cannot be changed.
+
 ## Pharmacy questions
 
 If the pharmacist has a question about a prescription (for example a stock issue or an unclear dose), it appears on your **Today** page. Reply there; the pharmacist sees your answer on the prescription.

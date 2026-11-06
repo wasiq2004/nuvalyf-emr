@@ -27,6 +27,9 @@ import {
   saveAllergyClass,
   saveDiagnosisCode,
   saveInteraction,
+  deleteLabRange,
+  saveLabParameter,
+  saveLabRange,
   saveLabTest,
   savePreset,
   saveVitalRange,
@@ -256,6 +259,71 @@ export const saveVitalRangeAction = clinicAction(
       const row = await saveVitalRange(tx, session.clinicId, id, values);
       await audit(tx, { action: id ? "VITAL_RANGE_UPDATED" : "VITAL_RANGE_ADDED", targetType: "vital_range", targetId: row.id, details: values });
       return row;
+    }),
+);
+
+const rangeLimit = z
+  .union([z.literal(""), z.coerce.number({ message: "Enter a number" })])
+  .optional()
+  .transform((v) => (v === "" || v === undefined ? undefined : v));
+
+export const saveLabParameterAction = clinicAction(
+  {
+    name: "catalog.saveLabParameter",
+    permission: "catalog:manage",
+    module: "lab",
+    schema: z.object({
+      id: optionalId,
+      testId: idField,
+      name: requiredText(120, "Name"),
+      section: optionalText(80),
+      unit: optionalText(40),
+      valueType: z.enum(["number", "text"]),
+      normalText: optionalText(60),
+      sortOrder: z.coerce.number().int().min(0).max(999).default(0),
+    }),
+  },
+  async ({ session, db, audit }, { id, ...input }) =>
+    db(async (tx) => {
+      const row = await saveLabParameter(tx, session.clinicId, id, input);
+      await audit(tx, { action: id ? "LAB_PARAMETER_UPDATED" : "LAB_PARAMETER_ADDED", targetType: "lab_test", targetId: input.testId, details: { name: input.name } });
+      return row;
+    }),
+);
+
+export const saveLabRangeAction = clinicAction(
+  {
+    name: "catalog.saveLabRange",
+    permission: "catalog:manage",
+    module: "lab",
+    schema: z.object({
+      parameterId: idField,
+      sex: z.enum(["any", "male", "female"]),
+      ageMinYears: z.coerce.number().int().min(0).max(130).default(0),
+      ageMaxYears: z
+        .union([z.literal(""), z.coerce.number().int().min(0).max(130)])
+        .optional()
+        .transform((v) => (v === "" || v === undefined ? null : v)),
+      low: rangeLimit,
+      high: rangeLimit,
+      criticalLow: rangeLimit,
+      criticalHigh: rangeLimit,
+    }),
+  },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const row = await saveLabRange(tx, session.clinicId, input);
+      await audit(tx, { action: "LAB_RANGE_SAVED", targetType: "lab_parameter", targetId: input.parameterId, details: { sex: input.sex } });
+      return row;
+    }),
+);
+
+export const deleteLabRangeAction = clinicAction(
+  { name: "catalog.deleteLabRange", permission: "catalog:manage", module: "lab", schema: z.object({ id: idField }) },
+  async ({ db, audit }, input) =>
+    db(async (tx) => {
+      await deleteLabRange(tx, input.id);
+      await audit(tx, { action: "LAB_RANGE_REMOVED", targetType: "lab_range", targetId: input.id });
     }),
 );
 

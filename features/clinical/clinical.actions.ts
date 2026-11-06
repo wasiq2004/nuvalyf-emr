@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { repeatPrescription } from "./suggestions.service";
 import { clinicAction } from "@/lib/auth/actions";
 import { can } from "@/lib/auth/clinic-session";
 import { checkbox, idField, optionalId, optionalInt, optionalNumber, optionalText, requiredText } from "@/lib/validation";
@@ -13,6 +14,7 @@ import {
   finalizeEncounter,
   handOver,
   saveNotes,
+  saveTriageNotes,
   savePrivateNote,
   startTriage,
   takeOverEncounter,
@@ -180,6 +182,19 @@ export const saveNotesAction = clinicAction(
     }),
 );
 
+export const saveTriageNotesAction = clinicAction(
+  {
+    name: "clinical.saveTriageNotes",
+    permission: "vitals:write",
+    schema: z.object({ encounterId: idField, chiefComplaint: optionalText(2000), nursingNotes: optionalText(4000) }),
+  },
+  async ({ session, db, audit }, { encounterId, ...notes }) =>
+    db(async (tx) => {
+      const row = await saveTriageNotes(tx, encounterId, notes, session.userId);
+      await audit(tx, { action: "TRIAGE_NOTES_SAVED", targetType: "encounter", targetId: encounterId, patientId: row.patientId });
+    }),
+);
+
 export const searchDiagnosisCodesAction = clinicAction(
   { name: "clinical.searchDiagnoses", permission: "encounter:write", schema: z.object({ query: z.string().max(100).default("") }) },
   async ({ db }, input) => db((tx) => searchDiagnosisCodes(tx, input.query)),
@@ -237,6 +252,22 @@ export const checkDrugAction = clinicAction(
     db(async (tx) => {
       const { warnings } = await warningsFor(tx, input.encounterId, input.drugId);
       return { warnings, needsOverride: needsOverride(warnings) };
+    }),
+);
+
+export const repeatPrescriptionAction = clinicAction(
+  { name: "clinical.repeatPrescription", permission: PRESCRIBE, schema: z.object({ encounterId: idField, prescriptionId: idField }) },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const result = await repeatPrescription(tx, session.clinicId, input.encounterId, input.prescriptionId, session.userId);
+      await audit(tx, {
+        action: "PRESCRIPTION_REPEATED",
+        targetType: "encounter",
+        targetId: input.encounterId,
+        patientId: result.patientId,
+        details: { from: input.prescriptionId, added: result.added.length, skipped: result.skipped.length },
+      });
+      return result;
     }),
 );
 

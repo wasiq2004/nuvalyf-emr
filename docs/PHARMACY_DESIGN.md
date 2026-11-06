@@ -126,10 +126,10 @@ Every report is a dated query over append-only documents, so re-running it for a
 |---|---|---|
 | `pharmacy:sell`, `pharmacy:dispense` | Pharmacist | Sales; now also discount within the clinic limit, customers |
 | `pharmacy:return` (new) | Pharmacist | Sales returns |
-| `pharmacy:cancel` (new) | Clinic Admin | Cancelling a sale |
+| `pharmacy:cancel` (new) | Clinic Admin | Cancelling a sale; discounts above the clinic limit |
 | `stock:manage` | Pharmacist | Purchase returns, reorder, labels |
 | `accounts:manage` (new) | Clinic Admin, Pharmacist | Receipts, supplier payments, customer credit limits |
-| `pharmacy:reports` (new) | Clinic Admin, Pharmacist, Auditor (read) | Pharmacy and GST reports |
+| `pharmacy:reports` (new) | Clinic Admin, Pharmacist | Pharmacy and GST reports |
 | `settings:manage` | Clinic Admin | Pharmacy settings |
 
 ## 7. Migration of existing data

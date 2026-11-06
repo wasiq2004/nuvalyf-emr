@@ -7,7 +7,7 @@ Pick the guide for your role. If you hold more than one role (for example Clinic
 | Super Admin / operator | [super-admin.md](super-admin.md) | The operations console: onboarding clinics, plans, suspensions |
 | Clinic Admin | [clinic-admin.md](clinic-admin.md) | Staff, roles, services, schedules, medicines, messaging, reports |
 | Receptionist | [receptionist.md](receptionist.md) | Patients, appointments, queue, billing |
-| Nurse | [nurse.md](nurse.md) | Triage: vitals, allergies, hand over |
+| Nurse | [nurse.md](nurse.md) | Triage: vitals, allergies, notes, hand over |
 | Doctor | [doctor.md](doctor.md) | Consultations, prescriptions, lab orders, signing |
 | Lab Technician | [lab-technician.md](lab-technician.md) | The lab worklist |
 | Pharmacist | [pharmacist.md](pharmacist.md) | Dispensing, sales, stock, purchase orders |

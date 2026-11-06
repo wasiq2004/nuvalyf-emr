@@ -69,9 +69,9 @@ export class Letter {
 
   wrap(text: string, size: number, width: number, font: PDFFont = this.regular): string[] {
     const lines: string[] = [];
-    for (const paragraph of this.safe(text, font).split(/\r?\n/)) {
+    for (const paragraph of text.split(/\r?\n/)) {
       let line = "";
-      for (const word of paragraph.split(/\s+/)) {
+      for (const word of this.safe(paragraph, font).split(/\s+/)) {
         const candidate = line ? `${line} ${word}` : word;
         if (font.widthOfTextAtSize(candidate, size) <= width) line = candidate;
         else {

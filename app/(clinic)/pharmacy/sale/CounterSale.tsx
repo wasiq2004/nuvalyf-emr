@@ -42,12 +42,14 @@ export function CounterSale({
   settings,
   canOverrideDiscount,
   canSetCredit,
+  admissions,
 }: {
   locale: string;
   currency: string;
   settings: CounterSettings;
   canOverrideDiscount: boolean;
   canSetCredit: boolean;
+  admissions: { id: string; label: string }[];
 }) {
   const router = useRouter();
   const [key] = useState(() => crypto.randomUUID());
@@ -63,6 +65,7 @@ export function CounterSale({
   const [discount, setDiscount] = useState("");
   const [method, setMethod] = useState("cash");
   const [reference, setReference] = useState("");
+  const [admissionId, setAdmissionId] = useState("");
   const [pending, setPending] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latest = useRef(0);
@@ -138,6 +141,7 @@ export function CounterSale({
     if (discountMinor > totals.gross) return "The discount is more than the bill";
     if (overLimit) return `Discounts above ${settings.maxDiscountPercent} % need a manager`;
     if (method === "credit" && !customer) return "Choose the customer to put it on account";
+    if (method === "inpatient" && !admissionId) return "Choose the admitted patient";
     if (missing.length) return "Fill in the prescription details";
     return null;
   })();
@@ -150,6 +154,7 @@ export function CounterSale({
       customerPhone,
       customerId: customer?.id ?? "",
       method,
+      admissionId: method === "inpatient" ? admissionId : "",
       reference,
       discount: discountMinor ? fromMinor(discountMinor) : "",
       prescriberName,
@@ -314,6 +319,19 @@ export function CounterSale({
             {canOverrideDiscount ? "" : `${discountMinor > 0 ? " · " : ""}up to ${settings.maxDiscountPercent} %`}
           </span>
         </label>
+        {method === "inpatient" && (
+          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Admitted patient
+            <select value={admissionId} onChange={(e) => setAdmissionId(e.target.value)} className={cn(inputClass, "mt-1.5 h-11")}>
+              <option value="">Choose…</option>
+              {admissions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Paid by
@@ -324,6 +342,7 @@ export function CounterSale({
                 </option>
               ))}
               {customer && <option value="credit">On account</option>}
+              {admissions.length > 0 && <option value="inpatient">Inpatient bill</option>}
             </select>
           </label>
           <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">

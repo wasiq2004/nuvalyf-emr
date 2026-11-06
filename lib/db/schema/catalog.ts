@@ -225,3 +225,58 @@ export const labTests = appSchema.table(
     uniqueIndex("lab_tests_clinic_starter_idx").on(t.clinicId, t.starterKey),
   ],
 );
+
+/**
+ * What a test reports: one row per parameter (Haemoglobin, Platelets...).
+ * A test with no parameters takes a single free-text result.
+ */
+export const labTestParameters = appSchema.table(
+  "lab_test_parameters",
+  {
+    id: id(),
+    clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    testId: uuid("test_id").notNull(),
+    starterKey: varchar("starter_key", { length: 80 }),
+    name: varchar("name", { length: 120 }).notNull(),
+    /** Heading on the report, e.g. "Differential count". */
+    section: varchar("section", { length: 80 }),
+    unit: varchar("unit", { length: 40 }),
+    /** number: checked against ranges. text: a word, checked against normalText. */
+    valueType: varchar("value_type", { length: 10 }).notNull().default("number"),
+    normalText: varchar("normal_text", { length: 60 }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("lab_test_parameters_clinic_id_id_key").on(t.clinicId, t.id),
+    uniqueIndex("lab_test_parameters_starter_idx").on(t.clinicId, t.starterKey),
+    foreignKey({ name: "lab_test_parameters_test_fk", columns: [t.clinicId, t.testId], foreignColumns: [labTests.clinicId, labTests.id] }),
+    index("lab_test_parameters_test_idx").on(t.testId),
+    check("lab_test_parameters_type_check", sql`${t.valueType} IN ('number', 'text')`),
+  ],
+);
+
+/** Reference and critical limits by sex and age band; each clinic sets its own. */
+export const labParameterRanges = appSchema.table(
+  "lab_parameter_ranges",
+  {
+    id: id(),
+    clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    parameterId: uuid("parameter_id").notNull(),
+    sex: varchar("sex", { length: 10 }).notNull().default("any"),
+    ageMinYears: integer("age_min_years").notNull().default(0),
+    /** Null = no upper age limit. */
+    ageMaxYears: integer("age_max_years"),
+    low: numeric("low", { precision: 14, scale: 4 }),
+    high: numeric("high", { precision: 14, scale: 4 }),
+    criticalLow: numeric("critical_low", { precision: 14, scale: 4 }),
+    criticalHigh: numeric("critical_high", { precision: 14, scale: 4 }),
+  },
+  (t) => [
+    foreignKey({ name: "lab_parameter_ranges_parameter_fk", columns: [t.clinicId, t.parameterId], foreignColumns: [labTestParameters.clinicId, labTestParameters.id] }).onDelete("cascade"),
+    index("lab_parameter_ranges_parameter_idx").on(t.parameterId),
+    check("lab_parameter_ranges_sex_check", sql`${t.sex} IN ('any', 'male', 'female')`),
+    check("lab_parameter_ranges_age_check", sql`${t.ageMaxYears} IS NULL OR ${t.ageMaxYears} >= ${t.ageMinYears}`),
+  ],
+);

@@ -4,14 +4,17 @@ import { z } from "zod";
 import { ArrowLeft, ClipboardList, MessageCircleQuestion, ShieldAlert } from "lucide-react";
 import { PageHeader, PageShell, Panel } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
-import { can, requireClinic } from "@/lib/auth/clinic-session";
+import { can, hasModule, requireClinic } from "@/lib/auth/clinic-session";
+import { openAdmissionFor } from "@/features/inpatient/inpatient.service";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
 import { DEFAULT_LOCALE, formatDate, formatDateTime } from "@/lib/format";
 import { todayInTimeZone } from "@/lib/time";
 import { getClinicSettings } from "@/features/settings/settings.service";
-import { getPrescriptionForDispensing } from "@/features/pharmacy/sales.service";
+import { dispensingHistory, getPrescriptionForDispensing } from "@/features/pharmacy/sales.service";
+import { dosageText } from "@/features/pharmacy/dispensing-rules";
+import { DispensedLines } from "@/components/pharmacy/dispensed-lines";
 import { listQueriesForPrescription } from "@/features/pharmacy/queries.service";
 import { ClosePrescriptionDialog, DispenseForm } from "./DispenseForm";
 import { getPharmacySettings } from "@/features/pharmacy/settings.service";
@@ -42,6 +45,8 @@ export default async function DispensePage({ params }: { params: Promise<{ id: s
     return {
       rx,
       queries: await listQueriesForPrescription(tx, id),
+      history: await dispensingHistory(tx, id),
+      admission: hasModule(ctx, "inpatient") ? await openAdmissionFor(tx, rx.patient.id) : null,
       currency: (await getClinicSettings(tx, ctx.clinicId)).currency,
       pharmacy: await getPharmacySettings(tx, ctx.clinicId),
     };
@@ -114,7 +119,10 @@ export default async function DispensePage({ params }: { params: Promise<{ id: s
         </Panel>
       )}
 
-      <Panel title="Prescription" description={`Signed ${formatDateTime(rx.signedAt, ctx.timezone)}. Fill each line from a batch; earliest expiry is chosen first.`}>
+      <Panel
+        title="Fill prescription"
+        description={`Signed ${formatDateTime(rx.signedAt, ctx.timezone)}. This is the pharmacy's copy: change the days, dose or medicine as needed. What the doctor signed stays as it is.`}
+      >
         {open ? (
           <DispenseForm
             prescriptionId={rx.prescriptionId}
@@ -128,11 +136,24 @@ export default async function DispensePage({ params }: { params: Promise<{ id: s
               maxDiscountPercent: data.pharmacy.maxDiscountPercent,
             }}
             canOverrideDiscount={can(ctx, "pharmacy:cancel")}
+            admissionId={data.admission?.id ?? null}
           />
         ) : (
-          <p className="text-sm text-zinc-500">This prescription is closed.</p>
+          <ol className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+            {rx.items.map((item, index) => (
+              <li key={item.id}>
+                {index + 1}. <span className="font-medium text-zinc-900 dark:text-zinc-100">{item.drugName}</span> · {dosageText(item)}
+              </li>
+            ))}
+          </ol>
         )}
       </Panel>
+
+      {data.history.length > 0 && (
+        <Panel title="Given so far">
+          <DispensedLines lines={data.history} timezone={ctx.timezone} linkSales />
+        </Panel>
+      )}
     </PageShell>
   );
 }

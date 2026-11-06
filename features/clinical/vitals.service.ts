@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
 import { patients, users, vitalRanges, vitals } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
@@ -93,6 +93,20 @@ function toEntry(row: typeof vitals.$inferSelect, recorder: { title: string | nu
     flags: (row.flags ?? {}) as VitalsEntry["flags"],
     notes: row.notes,
   };
+}
+
+/** The newest reading per consultation. */
+export async function latestVitalsFor(tx: Tx, encounterIds: string[]) {
+  const map = new Map<string, VitalsEntry>();
+  if (encounterIds.length === 0) return map;
+  const rows = await tx
+    .select({ v: vitals, title: users.title, firstName: users.firstName, lastName: users.lastName })
+    .from(vitals)
+    .innerJoin(users, eq(users.id, vitals.recordedBy))
+    .where(inArray(vitals.encounterId, encounterIds))
+    .orderBy(desc(vitals.recordedAt));
+  for (const r of rows) if (!map.has(r.v.encounterId)) map.set(r.v.encounterId, toEntry(r.v, r));
+  return map;
 }
 
 export async function listEncounterVitals(tx: Tx, encounterId: string): Promise<VitalsEntry[]> {

@@ -70,9 +70,9 @@ export async function collectedByMethod(tx: Tx, r: PharmacyRange) {
     tx,
     sql`
       select method, sum(amount)::numeric(14,2)::text as amount from (
-        select s.method, s.total as amount from app.pharmacy_sales s where ${salesIn(r)} and s.method <> 'credit'
+        select s.method, s.total as amount from app.pharmacy_sales s where ${salesIn(r)} and s.method not in ('credit', 'inpatient')
         union all
-        select cn.refund_method, -cn.total from app.sale_returns cn where ${returnsIn(r)} and cn.refund_method <> 'account'
+        select cn.refund_method, -cn.total from app.sale_returns cn where ${returnsIn(r)} and cn.refund_method not in ('account', 'inpatient')
         union all
         select c.method, c.amount from app.customer_receipts c where c.created_at >= ${r.from}::timestamptz and c.created_at < ${r.to}::timestamptz
       ) m group by method order by method`,

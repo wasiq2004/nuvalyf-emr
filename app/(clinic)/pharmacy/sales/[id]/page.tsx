@@ -16,6 +16,8 @@ import { getClinicSettings } from "@/features/settings/settings.service";
 import { getSale } from "@/features/pharmacy/sales.service";
 import { listSaleReturns, returnStateOf, returnableLines } from "@/features/pharmacy/returns.service";
 import { describeQuantity, packWord, unitWord } from "@/features/pharmacy/selling-rules";
+import { LINE_CHANGE_LABELS, dosageText, type LineChange } from "@/features/pharmacy/dispensing-rules";
+import { StatusBadge } from "@/components/app/status-badge";
 import { CancelSaleDialog, ReturnItemsDialog } from "./SaleActions";
 
 export const metadata = { title: "Pharmacy sale" };
@@ -107,11 +109,14 @@ export default async function SalePage({ params }: { params: Promise<{ id: strin
                 <div>
                   <p className="flex flex-wrap items-center gap-2 font-medium text-zinc-900 dark:text-zinc-100">
                     {i.description} <ScheduleBadge schedule={i.schedule} />
+                    {i.lineChange !== "none" && i.lineChange !== "as_prescribed" && <StatusBadge tone="warning">{LINE_CHANGE_LABELS[i.lineChange as LineChange]}</StatusBadge>}
                   </p>
                   <p className="text-xs text-zinc-500">
                     Batch {i.batchNo} · exp {formatDate(i.expiryDate, "UTC")}
                     {i.hsn ? ` · HSN ${i.hsn}` : ""}
                   </p>
+                  {dosageText(i) && <p className="mt-0.5 text-sm text-zinc-700 dark:text-zinc-300">{dosageText(i)}</p>}
+                  {i.prescribedText && <p className="text-xs text-amber-700 dark:text-amber-400">Doctor wrote {i.prescribedText}</p>}
                 </div>
               ),
             },
@@ -161,6 +166,7 @@ export default async function SalePage({ params }: { params: Promise<{ id: strin
             items={[
               { label: "Customer", value: sale.customer },
               ...(sale.customerGstin ? [{ label: "GSTIN", value: <span className="font-mono">{sale.customerGstin}</span> }] : []),
+              ...(sale.dispenseNote ? [{ label: "Pharmacist's note", value: sale.dispenseNote }] : []),
               ...(scheduled || sale.prescriberName
                 ? [
                     { label: "Prescriber", value: [sale.prescriberName, sale.prescriberRegNo ? `Reg. ${sale.prescriberRegNo}` : null].filter(Boolean).join(" · ") || "—" },

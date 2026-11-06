@@ -11,9 +11,12 @@ Tests appear under **Waiting for a result** as soon as a doctor orders them, old
 ## Entering a result
 
 1. Click **Enter result** next to the test.
-2. Enter the **Result** in the unit shown. The reference range is shown for comparison.
-3. Choose the **Interpretation**: **Within normal limits**, **Abnormal**, or **Critical: tell the doctor now**.
-4. Add **Notes** if needed and click **Save result**.
+2. Each parameter of the test is listed with this patient's reference range. Enter the numbers without units; **Low**, **High** or **Critical** appears as you type. Leave blank anything not done.
+3. Add **Notes** if needed and click **Save result**.
+
+A test with no parameters takes a single **Result** and **Interpretation**.
+
+Under **Resulted today**, **Report** opens the printable report and **History** shows the patient's results over time.
 
 The result appears in the doctor's **Unread results** straight away. For a critical result, also tell the doctor in person or by phone. NuvaLyf does not replace that call.
 

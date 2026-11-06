@@ -3,11 +3,14 @@ import "server-only";
 // Lab module: the doctor orders during the consultation, the Lab Technician
 // enters results, and results go back to the ordering doctor, staying on
 // their screen until they mark them read.
-import { and, asc, desc, eq, gte, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
-import { encounters, labOrders, labTests, patients, users } from "@/lib/db/schema";
+import { encounters, labOrders, labParameterRanges, labResults, labTestParameters, labTests, patients, users } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
 import { ageOn, displayPatientName } from "@/features/patients/patient-rules";
+import { toZonedDateTime } from "@/lib/time";
+import { addSourceCharge, admissionForEncounter, voidSourceCharge } from "@/features/inpatient/inpatient.service";
+import { cumulativeRows, numericFlag, overallFlag, parseLabNumber, pickRange, rangeText, resultSummary, textFlag, type LabFlag, type LabRange } from "./lab-rules";
 import { requireOwnOpenEncounter, staffName } from "./encounters.service";
 
 export const RESULT_FLAGS = ["normal", "abnormal", "critical"] as const;
@@ -44,6 +47,8 @@ export async function orderLab(tx: Tx, clinicId: string, encounterId: string, te
       orderedBy: userId,
     })
     .returning({ id: labOrders.id });
+  const stay = await admissionForEncounter(tx, encounterId);
+  if (stay && test.price) await addSourceCharge(tx, clinicId, stay.id, { kind: "lab", description: test.name, amount: test.price, sourceType: "lab_order", sourceId: row.id }, userId);
   return { id: row.id, patientId: encounter.patientId, testName: test.name };
 }
 
@@ -55,6 +60,7 @@ export async function cancelLabOrder(tx: Tx, id: string, userId: string) {
     .where(and(eq(labOrders.id, id), eq(labOrders.status, "ordered"), eq(labOrders.orderedBy, userId)))
     .returning({ id: labOrders.id, patientId: labOrders.patientId, testName: labOrders.testName });
   if (!row) throw new AppError("Only the ordering doctor can cancel a test, and only before it is resulted.");
+  await voidSourceCharge(tx, "lab_order", row.id, "Test cancelled", userId);
   return row;
 }
 
@@ -68,6 +74,9 @@ export async function listPatientLabOrders(tx: Tx, patientId: string, limit = 20
 
 export type LabWorkItem = {
   id: string;
+  encounterId: string;
+  patientId: string;
+  testId: string | null;
   testName: string;
   unit: string | null;
   referenceRange: string | null;
@@ -96,6 +105,9 @@ async function labRows(tx: Tx, where: ReturnType<typeof and>, today: string, ord
     .limit(limit);
   return rows.map((r) => ({
     id: r.order.id,
+    encounterId: r.order.encounterId,
+    patientId: r.order.patientId,
+    testId: r.order.testId,
     testName: r.order.testName,
     unit: r.order.unit,
     referenceRange: r.order.referenceRange,
@@ -145,7 +157,7 @@ export async function enterResult(
   return row;
 }
 
-export type UnreadResult = LabWorkItem & { encounterId: string };
+export type UnreadResult = LabWorkItem;
 
 /** Results for tests this doctor ordered that they have not read yet. */
 export async function listUnreadResults(tx: Tx, doctorId: string, today: string): Promise<UnreadResult[]> {
@@ -160,6 +172,8 @@ export async function listUnreadResults(tx: Tx, doctorId: string, today: string)
   return rows.map((r) => ({
     id: r.order.id,
     encounterId: r.encounterId,
+    patientId: r.order.patientId,
+    testId: r.order.testId,
     testName: r.order.testName,
     unit: r.order.unit,
     referenceRange: r.order.referenceRange,
@@ -186,4 +200,194 @@ export async function markResultRead(tx: Tx, id: string, doctorId: string) {
     .returning({ id: labOrders.id, patientId: labOrders.patientId });
   if (!row) throw new AppError("Only the ordering doctor can mark an unread result as read.");
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Parameter-by-parameter results (docs/LAB_REPORTS.md)
+// ---------------------------------------------------------------------------
+
+const toNumber = (v: string | null) => (v === null ? null : Number(v));
+
+async function parametersOf(tx: Tx, testIds: string[]) {
+  if (testIds.length === 0) return [];
+  const params = await tx
+    .select()
+    .from(labTestParameters)
+    .where(and(inArray(labTestParameters.testId, testIds), eq(labTestParameters.isActive, true)))
+    .orderBy(asc(labTestParameters.sortOrder), asc(labTestParameters.name));
+  const ranges = params.length ? await tx.select().from(labParameterRanges).where(inArray(labParameterRanges.parameterId, params.map((p) => p.id))) : [];
+  return params.map((p) => ({
+    ...p,
+    ranges: ranges
+      .filter((r) => r.parameterId === p.id)
+      .map(
+        (r): LabRange => ({
+          sex: r.sex as LabRange["sex"],
+          ageMinYears: r.ageMinYears,
+          ageMaxYears: r.ageMaxYears,
+          low: toNumber(r.low),
+          high: toNumber(r.high),
+          criticalLow: toNumber(r.criticalLow),
+          criticalHigh: toNumber(r.criticalHigh),
+        }),
+      ),
+  }));
+}
+
+export type LabEntryField = { id: string; name: string; section: string | null; unit: string | null; valueType: string; normalText: string | null; range: LabRange | null; reference: string };
+
+/** For each order, what the technician fills in, with this patient's ranges. */
+export async function entryFieldsFor(tx: Tx, items: { id: string; testId: string | null; patientSex: string; patientAge: number | null }[]) {
+  const params = await parametersOf(tx, [...new Set(items.map((i) => i.testId).filter((v): v is string => Boolean(v)))]);
+  const map = new Map<string, LabEntryField[]>();
+  for (const item of items) {
+    map.set(
+      item.id,
+      params
+        .filter((p) => p.testId === item.testId)
+        .map((p) => {
+          const range = p.valueType === "number" ? pickRange(p.ranges, item.patientSex, item.patientAge) : null;
+          return { id: p.id, name: p.name, section: p.section, unit: p.unit, valueType: p.valueType, normalText: p.normalText, range, reference: rangeText(range, p.normalText) };
+        }),
+    );
+  }
+  return map;
+}
+
+export async function enterParameterResults(tx: Tx, clinicId: string, id: string, input: { values: { parameterId: string; value: string }[]; notes?: string }, userId: string, today: string) {
+  const [order] = await tx.select().from(labOrders).where(eq(labOrders.id, id)).for("update").limit(1);
+  if (!order || order.status !== "ordered") throw new AppError("This test has already been resulted or was cancelled.");
+  const [patient] = await tx.select().from(patients).where(eq(patients.id, order.patientId)).limit(1);
+  const fields = (await entryFieldsFor(tx, [{ id, testId: order.testId, patientSex: patient?.sex ?? "unknown", patientAge: patient ? ageOn(patient, today) : null }])).get(id) ?? [];
+  const typed = new Map(input.values.map((v) => [v.parameterId, v.value.trim()]));
+
+  const rows = fields.flatMap((field, index) => {
+    const value = typed.get(field.id);
+    if (!value) return [];
+    const number = field.valueType === "number" ? parseLabNumber(value) : null;
+    if (field.valueType === "number" && number === null) throw new AppError(`${field.name}: enter a number, without the unit.`);
+    const flag = number !== null ? numericFlag(number, field.range) : textFlag(value, field.normalText);
+    return [
+      {
+        clinicId,
+        orderId: id,
+        patientId: order.patientId,
+        parameterId: field.id,
+        name: field.name,
+        section: field.section,
+        unit: field.unit,
+        sortOrder: index,
+        value,
+        valueNumber: number === null ? null : String(number),
+        flag,
+        referenceText: field.reference || null,
+        refLow: field.range?.low === null || field.range?.low === undefined ? null : String(field.range.low),
+        refHigh: field.range?.high === null || field.range?.high === undefined ? null : String(field.range.high),
+      },
+    ];
+  });
+  if (rows.length === 0) throw new AppError("Enter at least one result.");
+
+  await tx.insert(labResults).values(rows);
+  const flags = rows.map((r) => r.flag);
+  const overall = overallFlag(flags);
+  await tx
+    .update(labOrders)
+    .set({
+      status: "resulted",
+      resultValue: resultSummary(rows.map((r) => ({ name: r.name, value: r.value, unit: r.unit, flag: r.flag }))),
+      resultFlag: overall,
+      resultNotes: input.notes ?? null,
+      resultedBy: userId,
+      resultedAt: new Date(),
+      // The summary already carries each unit and range.
+      unit: null,
+      referenceRange: null,
+    })
+    .where(eq(labOrders.id, id));
+  return { id, patientId: order.patientId, testName: order.testName, flag: overall, parameters: rows.length };
+}
+
+export type LabResultLine = typeof labResults.$inferSelect;
+
+export async function resultsForOrders(tx: Tx, orderIds: string[]) {
+  const map = new Map<string, LabResultLine[]>();
+  if (orderIds.length === 0) return map;
+  const rows = await tx.select().from(labResults).where(inArray(labResults.orderId, orderIds)).orderBy(asc(labResults.sortOrder));
+  for (const r of rows) map.set(r.orderId, [...(map.get(r.orderId) ?? []), r]);
+  return map;
+}
+
+/** Everything for the printable report on one consultation's tests. */
+export async function labReport(tx: Tx, encounterId: string, today: string) {
+  const [row] = await tx
+    .select({ encounter: encounters, patient: patients, title: users.title, firstName: users.firstName, lastName: users.lastName })
+    .from(encounters)
+    .innerJoin(patients, eq(patients.id, encounters.patientId))
+    .leftJoin(users, eq(users.id, encounters.doctorId))
+    .where(eq(encounters.id, encounterId))
+    .limit(1);
+  if (!row) return null;
+  const orders = await tx.select().from(labOrders).where(eq(labOrders.encounterId, encounterId)).orderBy(asc(labOrders.orderedAt));
+  const done = orders.filter((o) => o.status === "resulted");
+  if (done.length === 0) return null;
+  const results = await resultsForOrders(tx, done.map((o) => o.id));
+  const staffIds = [...new Set(done.map((o) => o.resultedBy).filter((v): v is string => Boolean(v)))];
+  const staff = staffIds.length ? await tx.select().from(users).where(inArray(users.id, staffIds)) : [];
+  const testIds = done.map((o) => o.testId).filter((v): v is string => Boolean(v));
+  const tests = testIds.length ? await tx.select({ id: labTests.id, sampleType: labTests.sampleType }).from(labTests).where(inArray(labTests.id, testIds)) : [];
+  return {
+    patientId: row.patient.id,
+    patient: { name: displayPatientName(row.patient), mrn: row.patient.mrn, age: ageOn(row.patient, today), sex: row.patient.sex },
+    doctorName: row.firstName ? staffName({ title: row.title, firstName: row.firstName, lastName: row.lastName ?? "" }) : null,
+    pending: orders.filter((o) => o.status === "ordered").map((o) => o.testName),
+    tests: done.map((o) => {
+      const by = staff.find((s) => s.id === o.resultedBy);
+      return {
+        id: o.id,
+        name: o.testName,
+        sampleType: tests.find((t) => t.id === o.testId)?.sampleType ?? null,
+        orderedAt: o.orderedAt,
+        resultedAt: o.resultedAt!,
+        resultedByName: by ? staffName(by) : null,
+        notes: o.resultNotes,
+        // A single free-text result from before parameters, or a custom test.
+        single: results.has(o.id) ? null : { value: o.resultValue ?? "", unit: o.unit, reference: o.referenceRange, flag: o.resultFlag },
+        lines: results.get(o.id) ?? [],
+      };
+    }),
+  };
+}
+
+/** A patient's results over time, one table per test. */
+export async function patientLabHistory(tx: Tx, patientId: string, timeZone: string) {
+  const rows = await tx
+    .select({ line: labResults, test: labOrders.testName, resultedAt: labOrders.resultedAt, encounterId: labOrders.encounterId })
+    .from(labResults)
+    .innerJoin(labOrders, eq(labOrders.id, labResults.orderId))
+    .where(eq(labResults.patientId, patientId))
+    .orderBy(asc(labOrders.resultedAt), asc(labResults.sortOrder))
+    .limit(5000);
+  const byTest = new Map<string, typeof rows>();
+  for (const r of rows) byTest.set(r.test, [...(byTest.get(r.test) ?? []), r]);
+  const dateOf = (d: Date) => toZonedDateTime(d, timeZone).date;
+  const tests = [...byTest.entries()].map(([name, list]) => ({
+    name,
+    ...cumulativeRows(
+      list.map((r) => ({
+        key: r.line.parameterId ?? r.line.name,
+        name: r.line.name,
+        unit: r.line.unit,
+        date: dateOf(r.resultedAt!),
+        orderId: r.line.orderId,
+        value: r.line.value,
+        number: toNumber(r.line.valueNumber),
+        flag: r.line.flag as LabFlag,
+        ref: r.line.referenceText ?? "",
+      })),
+    ),
+  }));
+  const structured = new Set(rows.map((r) => r.line.orderId));
+  const others = (await listPatientLabOrders(tx, patientId, 100)).filter((o) => o.status === "resulted" && !structured.has(o.id));
+  return { tests, others };
 }

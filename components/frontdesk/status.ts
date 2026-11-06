@@ -8,6 +8,7 @@ export const VISIT_LABELS: Record<string, string> = {
   completed: "Completed",
   left: "Left unseen",
   cancelled: "Cancelled",
+  inpatient: "Admitted",
 };
 
 export function visitTone(status: string): BadgeTone {

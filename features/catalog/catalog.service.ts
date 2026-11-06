@@ -12,6 +12,8 @@ import {
   drugAllergyClasses,
   drugInteractions,
   drugs,
+  labParameterRanges,
+  labTestParameters,
   labTests,
   prescribingPresets,
   vitalRanges,
@@ -350,11 +352,76 @@ export async function saveLabTest(
   return row;
 }
 
+export async function labParameterCounts(tx: Tx) {
+  const rows = await tx.select({ testId: labTestParameters.testId, n: sql<number>`count(*)::int` }).from(labTestParameters).where(eq(labTestParameters.isActive, true)).groupBy(labTestParameters.testId);
+  return new Map(rows.map((r) => [r.testId, r.n]));
+}
+
+export async function getLabTestWithParameters(tx: Tx, id: string) {
+  const [test] = await tx.select().from(labTests).where(eq(labTests.id, id)).limit(1);
+  if (!test) return null;
+  const parameters = await tx.select().from(labTestParameters).where(eq(labTestParameters.testId, id)).orderBy(asc(labTestParameters.sortOrder), asc(labTestParameters.name));
+  const ranges = parameters.length
+    ? await tx.select().from(labParameterRanges).where(inArray(labParameterRanges.parameterId, parameters.map((p) => p.id))).orderBy(asc(labParameterRanges.sex), asc(labParameterRanges.ageMinYears))
+    : [];
+  return { ...test, parameters: parameters.map((p) => ({ ...p, ranges: ranges.filter((r) => r.parameterId === p.id) })) };
+}
+
+export type LabParameterInput = { testId: string; name: string; section?: string; unit?: string; valueType: "number" | "text"; normalText?: string; sortOrder: number };
+
+export async function saveLabParameter(tx: Tx, clinicId: string, id: string | null, input: LabParameterInput) {
+  const values = { name: input.name, section: input.section ?? null, unit: input.unit ?? null, valueType: input.valueType, normalText: input.valueType === "text" ? (input.normalText ?? null) : null, sortOrder: input.sortOrder };
+  if (id) {
+    const [row] = await tx.update(labTestParameters).set(values).where(eq(labTestParameters.id, id)).returning({ id: labTestParameters.id });
+    if (!row) throw new AppError("Parameter not found.");
+    return row;
+  }
+  const [row] = await tx.insert(labTestParameters).values({ clinicId, testId: input.testId, ...values }).returning({ id: labTestParameters.id });
+  return row;
+}
+
+export type LabRangeInput = {
+  parameterId: string;
+  sex: "any" | "male" | "female";
+  ageMinYears: number;
+  ageMaxYears: number | null;
+  low?: number;
+  high?: number;
+  criticalLow?: number;
+  criticalHigh?: number;
+};
+
+export async function saveLabRange(tx: Tx, clinicId: string, input: LabRangeInput) {
+  if (input.low === undefined && input.high === undefined) throw new AppError("Enter a low or a high limit.");
+  if (input.low !== undefined && input.high !== undefined && input.low > input.high) throw new AppError("Low cannot be above high.");
+  if (input.ageMaxYears !== null && input.ageMaxYears < input.ageMinYears) throw new AppError("The age band is the wrong way round.");
+  const text = (v: number | undefined) => (v === undefined ? null : String(v));
+  const [row] = await tx
+    .insert(labParameterRanges)
+    .values({
+      clinicId,
+      parameterId: input.parameterId,
+      sex: input.sex,
+      ageMinYears: input.ageMinYears,
+      ageMaxYears: input.ageMaxYears,
+      low: text(input.low),
+      high: text(input.high),
+      criticalLow: text(input.criticalLow),
+      criticalHigh: text(input.criticalHigh),
+    })
+    .returning({ id: labParameterRanges.id });
+  return row;
+}
+
+export async function deleteLabRange(tx: Tx, id: string) {
+  await tx.delete(labParameterRanges).where(eq(labParameterRanges.id, id));
+}
+
 // ---------------------------------------------------------------------------
 // Activate / deactivate (all sections)
 // ---------------------------------------------------------------------------
 
-export const ENTRY_KINDS = ["drug", "allergyClass", "interaction", "preset", "diagnosis", "vitalRange", "labTest"] as const;
+export const ENTRY_KINDS = ["drug", "allergyClass", "interaction", "preset", "diagnosis", "vitalRange", "labTest", "labParameter"] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 
 const ENTRY_TABLES = {
@@ -365,6 +432,7 @@ const ENTRY_TABLES = {
   diagnosis: diagnosisCodes,
   vitalRange: vitalRanges,
   labTest: labTests,
+  labParameter: labTestParameters,
 } as const;
 
 export async function setEntryActive(tx: Tx, kind: EntryKind, id: string, isActive: boolean) {

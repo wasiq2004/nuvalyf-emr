@@ -10,10 +10,17 @@ You dispense signed prescriptions, sell over the counter, keep stock and raise p
 - **Today's sales.**
 - **Needs attention:** medicines that are **Out**, **Low**, **Expired** or **Expiring**.
 
+## Finding a patient's prescription
+
+Type the patient's name, phone or record number in the search box at the top of **Pharmacy** and press Enter. You see all their prescriptions, including older and part-filled ones.
+
 ## Dispensing a prescription
 
 1. Click **Fill**.
-2. For each medicine, choose the **Batch**. NuvaLyf suggests the one expiring first, and expired batches cannot be chosen. Under **Sell as**, choose loose **Tablets** or **Strips**, then confirm the **Quantity**. You can never dispense more than the prescribed course, counted in tablets: a strip of 15 cannot be given against a 9-tablet course, so sell 9 loose tablets or ask the doctor. If the patient takes only part now, the rest stays on the prescription as **Part filled**.
+2. For each medicine, choose the **Batch**. NuvaLyf suggests the one expiring first, and expired batches cannot be chosen. Under **Sell as**, choose loose **Tablets** or **Strips**, then confirm the **Quantity**.
+   - **Changing what is given:** edit **Dose**, **Frequency**, **Days** or **Instructions**. If the patient buys 15 of 30 days, enter 15 in **Days** and the quantity follows. Use **Change medicine** to swap, **Not giving** to leave one out, and **Add a medicine** for something extra. No doctor approval is needed, and what the doctor signed stays as it is.
+   - **The rest of a course:** whatever the patient does not take stays on the prescription as **Part filled**.
+   - **Warnings:** a medicine the doctor did not write is checked against the patient. Read any warning and tick the box to go on.
 3. If something is unclear or unavailable, click **Ask doctor**, type **Your question** and **Send**. The doctor's reply appears under **Questions to the doctor**.
 4. Choose **Paid by** (and a **Reference** for card or UPI), then click **Dispense & take ₹X**. Stock is reduced and a receipt is created.
 

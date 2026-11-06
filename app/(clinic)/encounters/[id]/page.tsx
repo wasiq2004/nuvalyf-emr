@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { z } from "zod";
-import { ArrowLeft, FileDown, History, Lock, Pill, Stethoscope, TriangleAlert } from "lucide-react";
-import { buttonClass } from "@/components/app/buttons";
+import { ArrowLeft, FileDown, History, Lock, Pill, Printer, Stethoscope, TriangleAlert } from "lucide-react";
+import { ButtonLink, buttonClass } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { AllergyBanner } from "@/components/clinical/allergy-banner";
@@ -15,7 +15,7 @@ import { can, hasModule, requireClinic } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
-import { formatDate, formatDateTime, formatTime } from "@/lib/format";
+import { formatDate, formatDateTime, formatRelative, formatTime } from "@/lib/format";
 import { todayInTimeZone, toZonedDateTime } from "@/lib/time";
 import { getEncounterCore, getPrivateNote, listAmendments, listPatientEncounters } from "@/features/clinical/encounters.service";
 import { listQueriesForPrescription } from "@/features/pharmacy/queries.service";
@@ -24,10 +24,16 @@ import { listAllergies, listAllergyClassOptions } from "@/features/clinical/alle
 import { listEncounterVitals } from "@/features/clinical/vitals.service";
 import { listEncounterDiagnoses, searchDiagnosisCodes } from "@/features/clinical/diagnoses.service";
 import { getDraftPrescription, listPresets } from "@/features/clinical/prescriptions.service";
-import { listEncounterLabOrders, listLabTestOptions } from "@/features/clinical/lab.service";
+import { dispensingHistory } from "@/features/pharmacy/sales.service";
+import { admissionForEncounter } from "@/features/inpatient/inpatient.service";
+import { dosageText } from "@/features/pharmacy/dispensing-rules";
+import { frequentDiagnoses, frequentLabTests, frequentMedicines, lastPrescription, medicinesForDiagnoses } from "@/features/clinical/suggestions.service";
+import { DispensedLines } from "@/components/pharmacy/dispensed-lines";
+import { listEncounterLabOrders, listLabTestOptions, resultsForOrders } from "@/features/clinical/lab.service";
+import { LAB_FLAG_MARKS, type LabFlag } from "@/features/clinical/lab-rules";
 import type { RxWarning } from "@/features/clinical/prescribing-rules";
 import { cn } from "@/lib/utils";
-import { AmendmentForm, LabOrderForm, NotesForm, PrivateNoteForm, VitalsDialog } from "./EncounterForms";
+import { AmendmentForm, LabOrderForm, NotesForm, PatientContactDialog, PrivateNoteForm, TriageNotesForm, VitalsDialog } from "./EncounterForms";
 import { CancelLabButton, FinalizeButton, HandOverButton, RemoveDiagnosisButton, RemoveItemButton, TakeOverButton } from "./EncounterActions";
 import { DiagnosisPicker } from "./DiagnosisPicker";
 import { PrescriptionBuilder, WarningList } from "./PrescriptionBuilder";
@@ -105,11 +111,32 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
       getPrivateNote(tx, id),
       listPatientEncounters(tx, core.patient.id, 8),
     ]);
-    const queries =
-      prescription?.status === "signed" && hasModule(ctx, "pharmacy") ? await listQueriesForPrescription(tx, prescription.id) : [];
+    const labLines = await resultsForOrders(tx, labOrders.map((o) => o.id));
+    const stay = hasModule(ctx, "inpatient") ? await admissionForEncounter(tx, id) : null;
+    const pharmacyOn = prescription?.status === "signed" && hasModule(ctx, "pharmacy");
+    const queries = pharmacyOn ? await listQueriesForPrescription(tx, prescription.id) : [];
+    const dispensed = pharmacyOn ? await dispensingHistory(tx, prescription.id) : [];
+    const suggesting = core.encounter.status === "open" && can(ctx, "encounter:write");
+    const last = suggesting ? await lastPrescription(tx, core.patient.id, id) : null;
+    const suggestions = {
+      diagnoses: suggesting ? await frequentDiagnoses(tx, ctx.userId) : [],
+      labTests: suggesting && labOn ? await frequentLabTests(tx, ctx.userId) : [],
+      forDiagnosis: suggesting ? await medicinesForDiagnoses(tx, ctx.userId, diagnoses.map((d) => d.code)) : [],
+      frequent: suggesting ? await frequentMedicines(tx, ctx.userId) : [],
+      last: last && {
+        id: last.id,
+        date: formatDate(last.signedAt, ctx.timezone),
+        doctorName: last.doctorName,
+        items: last.items.map((i) => ({ name: i.drugName, text: dosageText(i) })),
+      },
+    };
     return {
       ...core,
       queries,
+      dispensed,
+      suggestions,
+      labLines,
+      stay,
       allergies,
       classes,
       vitals,
@@ -141,12 +168,12 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
   const previous = data.history.filter((h) => h.id !== encounter.id).slice(0, 5);
   // A nurse in triage works on vitals and allergies; the doctor's panels stay out of the way until they hold something.
   const triageView = open && !can(ctx, "encounter:write");
-  const hasNotes = [encounter.chiefComplaint, encounter.history, encounter.examination, encounter.plan, encounter.followUp].some(Boolean);
+  const doctorNotes = [encounter.history, encounter.examination, encounter.plan, encounter.followUp].some(Boolean);
 
   const vitalsPanel = (
     <Panel
       title="Vitals"
-      description={latestVitals ? `${latestVitals.recordedByName} · ${formatTime(latestVitals.recordedAt, ctx.timezone)}` : undefined}
+      description={latestVitals ? `Updated ${formatRelative(latestVitals.recordedAt)} · ${formatDateTime(latestVitals.recordedAt, ctx.timezone)} · ${latestVitals.recordedByName}` : undefined}
       actions={canVitals ? <VitalsDialog encounterId={encounter.id} primary={!latestVitals && !can(ctx, "encounter:write")} /> : undefined}
     >
       {latestVitals ? (
@@ -160,7 +187,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                 {data.vitals.slice(1).map((v) => (
                   <div key={v.id}>
                     <p className="mb-2 text-xs text-zinc-500">
-                      {v.recordedByName} · {formatTime(v.recordedAt, ctx.timezone)}
+                      {v.recordedByName} · {formatDateTime(v.recordedAt, ctx.timezone)}
                     </p>
                     <VitalsGrid values={v.values} flags={v.flags} compact={!triageView} />
                   </div>
@@ -194,8 +221,8 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
 
   return (
     <PageShell>
-      <Link href="/today" className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
-        <ArrowLeft className="h-4 w-4" /> Today
+      <Link href={data.stay ? `/inpatient/${data.stay.id}` : "/today"} className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> {data.stay ? "Inpatient stay" : "Today"}
       </Link>
 
       <PageHeader
@@ -291,8 +318,28 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
         <div className="min-w-0 space-y-6 xl:col-span-2">
           {triageView && vitalsPanel}
           {triageView && allergiesPanel}
+          {triageView && canVitals && (
+            <Panel
+              title="Triage notes"
+              description="The doctor reads these before seeing the patient."
+              actions={
+                can(ctx, "patient:contact") ? (
+                  <PatientContactDialog
+                    values={{ id: patient.id, mobile: patient.mobile ?? "", altPhone: patient.altPhone ?? "", email: patient.email ?? "", addressLine: patient.addressLine ?? "", city: patient.city ?? "" }}
+                  />
+                ) : undefined
+              }
+            >
+              <TriageNotesForm encounterId={encounter.id} values={{ chiefComplaint: encounter.chiefComplaint ?? "", nursingNotes: encounter.nursingNotes ?? "" }} />
+            </Panel>
+          )}
+          {!triageView && encounter.nursingNotes && (
+            <Panel title="Nursing notes" description={encounter.triageNotesAt ? `${data.triageNotesByName ?? "Nurse"} · ${formatDateTime(encounter.triageNotesAt, ctx.timezone)}` : undefined}>
+              <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">{encounter.nursingNotes}</p>
+            </Panel>
+          )}
 
-          {(!triageView || hasNotes) && (
+          {(!triageView || doctorNotes) && (
             <Panel title="Consultation notes">
               {canWrite ? (
                 <NotesForm
@@ -338,7 +385,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                 ) : (
                   !canWrite && <p className="text-sm text-zinc-500">No diagnosis recorded.</p>
                 )}
-                {canWrite && <DiagnosisPicker encounterId={encounter.id} favourites={data.favourites} />}
+                {canWrite && <DiagnosisPicker encounterId={encounter.id} favourites={data.favourites} frequent={data.suggestions.diagnoses} />}
               </div>
             </Panel>
           )}
@@ -395,7 +442,7 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                 ) : (
                   !canPrescribe && <EmptyState icon={Pill} title="No medicines prescribed" />
                 )}
-                {canPrescribe && <PrescriptionBuilder encounterId={encounter.id} presets={data.presets} />}
+                {canPrescribe && <PrescriptionBuilder encounterId={encounter.id} presets={data.presets} suggestions={data.suggestions} />}
               </div>
             </Panel>
           )}
@@ -416,7 +463,24 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                           >
                             {o.testName}
                           </p>
-                          {o.status === "resulted" ? (
+                          {data.labLines.get(o.id) ? (
+                            <table className="mt-1.5 text-sm">
+                              <tbody>
+                                {data.labLines.get(o.id)!.map((l) => (
+                                  <tr key={l.id}>
+                                    <th scope="row" className="py-0.5 pr-4 text-left font-normal text-zinc-600 dark:text-zinc-400">
+                                      {l.name}
+                                    </th>
+                                    <td className={cn("py-0.5 pr-3 text-right tabular-nums", l.flag === "normal" ? "text-zinc-900 dark:text-zinc-100" : "font-semibold text-amber-700 dark:text-amber-400")}>
+                                      {l.value} {LAB_FLAG_MARKS[l.flag as LabFlag]}
+                                    </td>
+                                    <td className="py-0.5 pr-3 text-xs text-zinc-500">{l.unit}</td>
+                                    <td className="py-0.5 text-xs text-zinc-500">{l.referenceText}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : o.status === "resulted" ? (
                             <p className="mt-0.5 text-sm text-zinc-700 dark:text-zinc-300">
                               <span className="font-semibold">{o.resultValue}</span>
                               {o.unit ? ` ${o.unit}` : ""}
@@ -441,8 +505,24 @@ export default async function EncounterPage({ params }: { params: Promise<{ id: 
                     ))}
                   </ul>
                 )}
-                {canOrderLab && <LabOrderForm encounterId={encounter.id} tests={data.labTests} />}
+                {data.labOrders.some((o) => o.status === "resulted") && (
+                  <div className="flex flex-wrap gap-2">
+                    <a href={`/lab/report/${encounter.id}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")}>
+                      <Printer className="h-4 w-4" /> Lab report
+                    </a>
+                    <ButtonLink href={`/lab/patients/${patient.id}`} variant="ghost" size="sm">
+                      All results
+                    </ButtonLink>
+                  </div>
+                )}
+                {canOrderLab && <LabOrderForm encounterId={encounter.id} tests={data.labTests} frequent={data.suggestions.labTests} />}
               </div>
+            </Panel>
+          )}
+
+          {data.dispensed.length > 0 && (
+            <Panel title="Given by the pharmacy" description="What the patient actually received. It can differ from the prescription, which stays as you signed it.">
+              <DispensedLines lines={data.dispensed} timezone={ctx.timezone} linkSales={can(ctx, "pharmacy:sell")} />
             </Panel>
           )}
 

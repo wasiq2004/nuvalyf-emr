@@ -47,8 +47,10 @@ async function seenWith(firstName: string, mobile: string, age: number, code: st
 function expectNoIdentifiers(value: unknown) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   for (const id of identifiers) expect(text, `leaked "${id}"`).not.toContain(id);
-  // No 10-digit numbers either (mobiles in any format).
-  expect(text).not.toMatch(/(?<!\d)\d{10}(?!\d)/);
+  // No 10-digit numbers either (mobiles in any format). Random record ids and
+  // pseudonyms are hex, so they can hold a run of digits by chance.
+  const withoutRandomIds = text.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "").replace(/\bp_[0-9a-f]{16}\b/g, "");
+  expect(withoutRandomIds).not.toMatch(/(?<!\d)\d{10}(?!\d)/);
 }
 
 beforeAll(async () => {

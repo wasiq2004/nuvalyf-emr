@@ -1,6 +1,6 @@
 // Pure queue rules (unit tested).
 
-export const VISIT_STATUSES = ["waiting", "in_triage", "ready", "with_doctor", "completed", "left", "cancelled"] as const;
+export const VISIT_STATUSES = ["waiting", "in_triage", "ready", "with_doctor", "completed", "left", "cancelled", "inpatient"] as const;
 export type VisitStatus = (typeof VISIT_STATUSES)[number];
 
 /** Statuses that count as "still in the building and not yet seen". */

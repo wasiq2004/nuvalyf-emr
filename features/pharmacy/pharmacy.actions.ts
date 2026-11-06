@@ -5,7 +5,8 @@ import { clinicAction } from "@/lib/auth/actions";
 import { isValidDateString, todayInTimeZone } from "@/lib/time";
 import { idField, optionalId, optionalMoney, optionalPhone, optionalText, requiredText } from "@/lib/validation";
 import { PAYMENT_METHODS } from "@/features/billing/billing-rules";
-import { closePrescription, sell, sellableStock } from "./sales.service";
+import { closePrescription, dispenseWarnings, sell, sellableStock } from "./sales.service";
+import { needsOverride } from "@/features/clinical/prescribing-rules";
 import { adjustStock, receiveStock, setReorderLevel } from "./stock.service";
 import { answerQuery, raiseQuery } from "./queries.service";
 import { cancelOrder, createOrder, decideOrder, receiveOrder, removeOrderItem, saveSupplier, setOrderItem, submitOrder } from "./purchasing.service";
@@ -26,7 +27,13 @@ const batchField = z.string({ message: "Batch is required" }).trim().min(1, "Bat
 // Selling and dispensing
 // ---------------------------------------------------------------------------
 
-const saleLine = z.object({ drugId: idField, batchId: idField, quantity: quantity(), soldAs: z.enum(SOLD_AS).default("unit"), prescriptionItemId: optionalId });
+const dosage = z.object({
+  dose: optionalText(60),
+  frequency: optionalText(40),
+  durationDays: z.coerce.number({ message: "Days must be a number" }).int("Whole days only").min(1, "Days must be at least 1").max(3650).nullable().optional(),
+  instructions: z.string().trim().max(300).optional(),
+});
+const saleLine = z.object({ drugId: idField, batchId: idField, quantity: quantity(), soldAs: z.enum(SOLD_AS).default("unit"), prescriptionItemId: optionalId, dosage: dosage.optional() });
 
 export const searchSellableAction = clinicAction(
   { name: "pharmacy.searchStock", permission: "pharmacy:sell", module: "pharmacy", schema: z.object({ query: z.string().max(100).default("") }) },
@@ -35,7 +42,8 @@ export const searchSellableAction = clinicAction(
 
 /** Discount, buyer and Schedule H/H1/X details, shared by counter sales and dispensing. */
 const saleExtras = {
-  method: z.enum([...PAYMENT_METHODS, "credit"]),
+  method: z.enum([...PAYMENT_METHODS, "credit", "inpatient"]),
+  admissionId: optionalId,
   reference: optionalText(100),
   discount: optionalMoney,
   customerId: optionalId,
@@ -79,6 +87,26 @@ export const counterSaleAction = clinicAction(
     }),
 );
 
+/** Stock search for swapping or adding a medicine while filling a prescription. */
+export const searchDispensableAction = clinicAction(
+  { name: "pharmacy.searchDispensable", permission: "pharmacy:dispense", module: "pharmacy", schema: z.object({ query: z.string().max(100).default("") }) },
+  async ({ session, db }, input) => db((tx) => sellableStock(tx, input.query, todayInTimeZone(session.timezone))),
+);
+
+export const checkDispenseDrugAction = clinicAction(
+  {
+    name: "pharmacy.checkDispenseDrug",
+    permission: "pharmacy:dispense",
+    module: "pharmacy",
+    schema: z.object({ prescriptionId: idField, drugId: idField, replacesItemId: optionalId }),
+  },
+  async ({ db }, input) =>
+    db(async (tx) => {
+      const warnings = await dispenseWarnings(tx, input.prescriptionId, input.drugId, input.replacesItemId);
+      return { warnings, needsOverride: needsOverride(warnings) };
+    }),
+);
+
 export const dispenseAction = clinicAction(
   {
     name: "pharmacy.dispense",
@@ -86,7 +114,9 @@ export const dispenseAction = clinicAction(
     module: "pharmacy",
     schema: z.object({
       prescriptionId: idField,
-      lines: z.array(saleLine.extend({ prescriptionItemId: idField })).min(1, "Fill at least one line").max(50),
+      lines: z.array(saleLine).min(1, "Fill at least one line").max(50),
+      dispenseNote: optionalText(300),
+      warningsChecked: z.boolean().optional(),
       ...saleExtras,
     }),
   },
@@ -101,7 +131,7 @@ export const dispenseAction = clinicAction(
           targetType: "prescription",
           targetId: input.prescriptionId,
           patientId: result.patientId,
-          details: { sale: result.number, total: result.total, status: result.dispenseStatus },
+          details: { sale: result.number, total: result.total, status: result.dispenseStatus, changedLines: result.changedLines },
         });
       }
       return result;

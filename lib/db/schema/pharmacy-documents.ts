@@ -75,7 +75,7 @@ export const saleReturns = appSchema.table(
     index("sale_returns_sale_idx").on(t.saleId),
     index("sale_returns_created_idx").on(t.clinicId, t.createdAt),
     check("sale_returns_kind_check", sql`${t.kind} IN ('return', 'cancellation')`),
-    check("sale_returns_method_check", sql`${t.refundMethod} IN ('cash', 'upi', 'card', 'other', 'account')`),
+    check("sale_returns_method_check", sql`${t.refundMethod} IN ('cash', 'upi', 'card', 'other', 'account', 'inpatient')`),
     check("sale_returns_total_check", sql`${t.total} >= 0 AND ${t.taxTotal} >= 0`),
   ],
 );

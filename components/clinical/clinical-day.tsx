@@ -12,6 +12,7 @@ import type { OpenQuery } from "@/features/pharmacy/queries.service";
 import { AnswerQueryForm } from "@/components/clinical/answer-query";
 import { waitMinutes } from "@/features/queue/queue-rules";
 import { formatTime } from "@/lib/format";
+import { VitalsLine } from "@/components/clinical/vitals-line";
 
 function OpenButton({ encounterId, label = "Open" }: { encounterId: string | null; label?: string }) {
   if (!encounterId) return null;
@@ -116,6 +117,7 @@ export function DoctorDay({
                 items={mine}
                 now={now}
                 linkPatients
+                renderDetail={(item) => <VitalsLine vitals={item.latestVitals} chiefComplaint={item.chiefComplaint} timezone={timezone} now={now} />}
                 renderActions={(item) =>
                   // In triage: the status badge already says so; the nurse hands over when ready.
                   item.status === "in_triage" ? null : <CallPatientButton visitId={item.id} patientName={item.patientName} />
@@ -173,7 +175,7 @@ export function DoctorDay({
   );
 }
 
-export function NurseDay({ queue, now }: { queue: ClinicalQueueItem[]; now: Date }) {
+export function NurseDay({ queue, timezone, now }: { queue: ClinicalQueueItem[]; timezone: string; now: Date }) {
   const toTriage = queue.filter((q) => q.status === "waiting" || q.status === "in_triage");
   const ready = queue.filter((q) => q.status === "ready");
   const withDoctor = queue.filter((q) => q.status === "with_doctor");
@@ -197,6 +199,7 @@ export function NurseDay({ queue, now }: { queue: ClinicalQueueItem[]; now: Date
             items={toTriage}
             now={now}
             linkPatients
+            renderDetail={(item) => <VitalsLine vitals={item.latestVitals} chiefComplaint={item.chiefComplaint} timezone={timezone} now={now} />}
             renderActions={(item) =>
               item.status === "in_triage" ? (
                 <OpenButton encounterId={item.encounterId} label="Continue" />
@@ -210,7 +213,13 @@ export function NurseDay({ queue, now }: { queue: ClinicalQueueItem[]; now: Date
 
       {(ready.length > 0 || withDoctor.length > 0) && (
         <Panel flush title="Handed over">
-          <QueueBoard items={[...ready, ...withDoctor]} now={now} linkPatients renderActions={(item) => <OpenButton encounterId={item.encounterId} />} />
+          <QueueBoard
+            items={[...ready, ...withDoctor]}
+            now={now}
+            linkPatients
+            renderDetail={(item) => <VitalsLine vitals={item.latestVitals} chiefComplaint={item.chiefComplaint} timezone={timezone} now={now} />}
+            renderActions={(item) => <OpenButton encounterId={item.encounterId} />}
+          />
         </Panel>
       )}
     </>

@@ -3,7 +3,7 @@ import "server-only";
 // Pharmacy sales: over the counter, or filling a signed prescription. One
 // transaction takes the money and moves the stock; the idempotency key makes
 // a double-tap or a retry return the first sale instead of selling twice.
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
 import {
   allergies,
@@ -23,10 +23,14 @@ import { AppError } from "@/lib/errors";
 import { idempotent } from "@/lib/idempotency";
 import { fromMinor, toMinor } from "@/lib/money";
 import { ageOn, displayPatientName } from "@/features/patients/patient-rules";
-import { nextCounter } from "@/features/patients/patients.service";
+import { nextCounter, searchPatients } from "@/features/patients/patients.service";
 import { staffName } from "@/features/clinical/encounters.service";
 import type { PaymentMethod } from "@/features/billing/billing-rules";
 import { moveStock } from "./stock.service";
+import { checkAgainstPatient } from "@/features/clinical/prescriptions.service";
+import { addSourceCharge, getAdmission } from "@/features/inpatient/inpatient.service";
+import { needsOverride } from "@/features/clinical/prescribing-rules";
+import { classifyLine, daysLeft, dosageText, type Dosage } from "./dispensing-rules";
 import { isExpired, suggestQuantity } from "./stock-rules";
 import { packWord, sellingPrice, unitsFor, type SoldAs } from "./selling-rules";
 import { priceSale, stateOfGstin, taxModeFor } from "./gst-rules";
@@ -35,8 +39,14 @@ import { missingDetails } from "./schedule-rules";
 import { effectiveGst, getPharmacySettings } from "./settings.service";
 import { customerBalance, ensurePatientCustomer, getCustomer, type CustomerRow } from "./customers.service";
 
-/** `quantity` counts units, or packs when `soldAs` is "pack" (default "unit"). */
-export type SaleLine = { drugId: string; batchId: string; quantity: number; soldAs?: SoldAs; prescriptionItemId?: string | null };
+/** How to take it, as dispensed. Anything left out keeps what the doctor wrote. */
+export type LineDosage = { dose?: string; frequency?: string; durationDays?: number | null; instructions?: string };
+
+/**
+ * `quantity` counts units, or packs when `soldAs` is "pack" (default "unit").
+ * When dispensing, no `prescriptionItemId` means the pharmacist added the item.
+ */
+export type SaleLine = { drugId: string; batchId: string; quantity: number; soldAs?: SoldAs; prescriptionItemId?: string | null; dosage?: LineDosage };
 
 export type SaleInput = {
   lines: SaleLine[];
@@ -46,7 +56,9 @@ export type SaleInput = {
   customerPhone?: string;
   /** Named customer: required for credit, makes the sale B2B when it has a GSTIN. */
   customerId?: string | null;
-  method: PaymentMethod | "credit";
+  method: PaymentMethod | "credit" | "inpatient";
+  /** With method "inpatient": the stay the sale is charged to. */
+  admissionId?: string | null;
   reference?: string;
   /** Bill discount in rupees, tax-inclusive. */
   discount?: string;
@@ -54,10 +66,14 @@ export type SaleInput = {
   prescriberName?: string;
   prescriberRegNo?: string;
   patientAddress?: string;
+  /** Pharmacist's note on a prescription filled differently. */
+  dispenseNote?: string;
+  /** The pharmacist has read the allergy / interaction warnings for changed medicines. */
+  warningsChecked?: boolean;
   idempotencyKey: string;
 };
 
-export type SaleResult = { saleId: string; number: string; total: string; patientId: string | null; dispenseStatus: string | null };
+export type SaleResult = { saleId: string; number: string; total: string; patientId: string | null; dispenseStatus: string | null; changedLines: number };
 
 /** What the caller may do beyond the counter defaults. */
 export type SaleAuthority = { overrideDiscountLimit: boolean };
@@ -97,25 +113,15 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     if (rx.dispenseStatus === "dispensed" || rx.dispenseStatus === "not_required") throw new AppError("This prescription is already closed.");
     patientId = rx.patientId;
     rxItems = await tx.select().from(prescriptionItems).where(eq(prescriptionItems.prescriptionId, rx.id));
-    // Never more than the prescribed course (when the prescription states it).
-    const given = await dispensedQuantities(tx, rx.id);
-    for (const item of rxItems) {
-      const needed = suggestQuantity(item);
-      if (needed === null) continue;
-      const now = sized.filter((s) => s.line.prescriptionItemId === item.id).reduce((n, s) => n + s.units, 0);
-      const remaining = Math.max(0, needed - (given.get(item.id) ?? 0));
-      if (now > remaining) throw new AppError(`${item.drugName}: only ${remaining} left to dispense on this prescription.`);
-    }
-    for (const line of input.lines) {
-      const item = rxItems.find((i) => i.id === line.prescriptionItemId);
-      if (!item) throw new AppError("A line does not belong to this prescription.");
-      if (item.drugId && item.drugId !== line.drugId) {
-        // Substitution: same generic only - the pharmacist cannot change the medicine.
-        const [chosen] = await tx.select({ genericName: drugs.genericName }).from(drugs).where(eq(drugs.id, line.drugId)).limit(1);
-        if (!chosen || chosen.genericName.trim().toLowerCase() !== item.genericName.trim().toLowerCase()) {
-          throw new AppError(`${item.drugName} can only be filled with the same medicine or the same generic.`);
-        }
-      }
+    // The pharmacist decides what is given: less than the course, more (a whole
+    // strip), another medicine or an extra one. A medicine the doctor did not
+    // write is still checked against the patient before it leaves the counter.
+    for (const { line, drug } of sized) {
+      const item = line.prescriptionItemId ? rxItems.find((i) => i.id === line.prescriptionItemId) : null;
+      if (line.prescriptionItemId && !item) throw new AppError("A line does not belong to this prescription.");
+      if (item?.drugId === drug.id || drug.itemType !== "medicine") continue;
+      const warnings = await checkAgainstPatient(tx, rx.patientId, drug, rxItems.filter((i) => i.id !== item?.id));
+      if (needsOverride(warnings) && !input.warningsChecked) throw new AppError(`${drug.name}: ${warnings[0].message} Confirm you have checked this before dispensing.`);
     }
     // The register details come from the signed prescription itself.
     const snapshot = (rx.signedSnapshot ?? {}) as { prescriber?: { name?: string; registrationNumber?: string } };
@@ -124,6 +130,19 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     details.prescriberRegNo = snapshot.prescriber?.registrationNumber ?? details.prescriberRegNo;
     details.patientName = patient ? displayPatientName(patient) : details.patientName;
     details.patientAddress = patient ? [patient.addressLine, patient.city].filter(Boolean).join(", ") || details.patientAddress : details.patientAddress;
+  }
+
+  // Charged to a stay: the bill collects it, and the admission names the patient and doctor.
+  let admission: { id: string } | null = null;
+  if (input.method === "inpatient") {
+    const stay = input.admissionId ? await getAdmission(tx, input.admissionId, today) : null;
+    if (!stay || stay.status !== "admitted") throw new AppError("Choose a patient who is admitted.");
+    if (patientId && patientId !== stay.patientId) throw new AppError("That admission is for another patient.");
+    admission = { id: stay.id };
+    patientId = stay.patientId;
+    details.prescriberName ??= stay.doctorName;
+    details.patientName ??= stay.patient.name;
+    details.patientAddress ??= [stay.patient.addressLine, stay.patient.city].filter(Boolean).join(", ") || null;
   }
 
   // Scheduled drugs leave the counter only with the details the law asks for.
@@ -208,13 +227,17 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
       total: fromMinor(priced.total),
       method: input.method,
       reference: input.reference ?? null,
+      dispenseNote: input.dispenseNote?.trim() || null,
       soldBy: actorId,
     })
     .returning({ id: pharmacySales.id });
 
+  let changedLines = 0;
   await tx.insert(pharmacySaleItems).values(
     lines.map((p, i) => {
       const t = priced.lines[i];
+      const copy = pharmacyCopy(p.line, p.drug.id, rxItems, Boolean(input.prescriptionId));
+      if (copy.lineChange !== "none" && copy.lineChange !== "as_prescribed") changedLines += 1;
       return {
         clinicId,
         saleId: sale.id,
@@ -239,6 +262,7 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
         igst: fromMinor(t.igst),
         schedule: p.drug.schedule,
         unitCost: p.batch.unitCost,
+        ...copy,
       };
     }),
   );
@@ -251,11 +275,30 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     );
   }
 
+  if (admission) {
+    await addSourceCharge(tx, clinicId, admission.id, { kind: "pharmacy", description: `Pharmacy ${number}: ${lines.map((l) => l.drug.name).join(", ")}`.slice(0, 300), amount: fromMinor(priced.total), sourceType: "pharmacy_sale", sourceId: sale.id }, actorId);
+  }
+
   let dispenseStatus: string | null = null;
   if (input.prescriptionId) {
     dispenseStatus = await refreshDispenseStatus(tx, input.prescriptionId, rxItems);
   }
-  return { saleId: sale.id, number, total: fromMinor(priced.total), patientId, dispenseStatus };
+  return { saleId: sale.id, number, total: fromMinor(priced.total), patientId, dispenseStatus, changedLines };
+}
+
+/** The sale line's own copy of the dosage, and how it differs from the doctor's. */
+function pharmacyCopy(line: SaleLine, drugId: string, rxItems: (typeof prescriptionItems.$inferSelect)[], dispensing: boolean) {
+  if (!dispensing) return { dose: null, frequency: null, durationDays: null, instructions: null, lineChange: "none" as const, prescribedText: null };
+  const item = rxItems.find((i) => i.id === line.prescriptionItemId) ?? null;
+  const given: Dosage = {
+    dose: line.dosage?.dose?.trim() || item?.dose || null,
+    frequency: line.dosage?.frequency?.trim() || item?.frequency || null,
+    durationDays: line.dosage?.durationDays === undefined ? (item?.durationDays ?? null) : line.dosage.durationDays,
+    instructions: line.dosage?.instructions === undefined ? (item?.instructions ?? null) : line.dosage.instructions.trim() || null,
+  };
+  const lineChange = classifyLine(item, given, drugId);
+  const prescribedText = item && lineChange !== "as_prescribed" ? `${item.drugName}: ${dosageText(item)}`.slice(0, 400) : null;
+  return { ...given, lineChange, prescribedText };
 }
 
 /** Dispensed when every line has had its full quantity; partial if some; pending if none (after returns). */
@@ -281,6 +324,39 @@ async function dispensedQuantities(tx: Tx, prescriptionId: string) {
     .where(eq(pharmacySales.prescriptionId, prescriptionId))
     .groupBy(pharmacySaleItems.prescriptionItemId);
   return new Map(rows.filter((r) => r.itemId).map((r) => [r.itemId!, r.qty]));
+}
+
+/** Warnings for a medicine the doctor did not write, shown before it is given. */
+export async function dispenseWarnings(tx: Tx, prescriptionId: string, drugId: string, replacesItemId: string | null) {
+  const [rx] = await tx.select({ patientId: prescriptions.patientId }).from(prescriptions).where(eq(prescriptions.id, prescriptionId)).limit(1);
+  const [drug] = await tx.select().from(drugs).where(eq(drugs.id, drugId)).limit(1);
+  if (!rx || !drug) throw new AppError("Prescription or medicine not found.");
+  if (drug.itemType !== "medicine") return [];
+  const others = (await tx.select().from(prescriptionItems).where(eq(prescriptionItems.prescriptionId, prescriptionId))).filter((i) => i.id !== replacesItemId);
+  return checkAgainstPatient(tx, rx.patientId, drug, others);
+}
+
+/** Everything given against a prescription so far, newest first. */
+export async function dispensingHistory(tx: Tx, prescriptionId: string) {
+  const rows = await tx
+    .select({
+      item: pharmacySaleItems,
+      saleNumber: pharmacySales.number,
+      soldAt: pharmacySales.soldAt,
+      note: pharmacySales.dispenseNote,
+      form: drugs.form,
+      returned: sql<number>`coalesce((select sum(ri.quantity) from app.sale_return_items ri where ri.sale_item_id = ${pharmacySaleItems.id}), 0)::int`,
+      title: users.title,
+      firstName: users.firstName,
+      lastName: users.lastName,
+    })
+    .from(pharmacySaleItems)
+    .innerJoin(pharmacySales, eq(pharmacySales.id, pharmacySaleItems.saleId))
+    .innerJoin(drugs, eq(drugs.id, pharmacySaleItems.drugId))
+    .innerJoin(users, eq(users.id, pharmacySales.soldBy))
+    .where(eq(pharmacySales.prescriptionId, prescriptionId))
+    .orderBy(desc(pharmacySales.soldAt));
+  return rows.map((r) => ({ ...r.item, saleNumber: r.saleNumber, soldAt: r.soldAt, note: r.note, form: r.form, returned: r.returned, soldByName: staffName(r) }));
 }
 
 /** Patient will not take it from here (bought elsewhere, declined): close it. */
@@ -311,13 +387,29 @@ export type PharmacyQueueItem = {
 };
 
 export async function listPrescriptionQueue(tx: Tx, today: string, since: Date): Promise<PharmacyQueueItem[]> {
+  return queueItems(tx, today, and(eq(prescriptions.status, "signed"), inArray(prescriptions.dispenseStatus, ["pending", "partial"]), gte(prescriptions.signedAt, since)), asc(prescriptions.signedAt));
+}
+
+/**
+ * A patient at the counter gives a name, phone or record number: their
+ * prescriptions, newest first, however old, whether or not fully filled.
+ */
+export async function findPrescriptionsForPatient(tx: Tx, query: string, today: string): Promise<PharmacyQueueItem[]> {
+  if (query.trim().length < 2) return [];
+  const found = await searchPatients(tx, query, today, 20);
+  if (found.length === 0) return [];
+  const list = await queueItems(tx, today, and(eq(prescriptions.status, "signed"), inArray(prescriptions.patientId, found.map((p) => p.id))), desc(prescriptions.signedAt));
+  return list.slice(0, 30);
+}
+
+async function queueItems(tx: Tx, today: string, where: SQL | undefined, order: SQL): Promise<PharmacyQueueItem[]> {
   const rows = await tx
     .select({ rx: prescriptions, patient: patients, title: users.title, firstName: users.firstName, lastName: users.lastName })
     .from(prescriptions)
     .innerJoin(patients, eq(patients.id, prescriptions.patientId))
     .innerJoin(users, eq(users.id, prescriptions.prescriberId))
-    .where(and(eq(prescriptions.status, "signed"), inArray(prescriptions.dispenseStatus, ["pending", "partial"]), gte(prescriptions.signedAt, since)))
-    .orderBy(asc(prescriptions.signedAt));
+    .where(where)
+    .orderBy(order);
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.rx.id);
   const counts = await tx
@@ -404,6 +496,7 @@ export async function getPrescriptionForDispensing(tx: Tx, prescriptionId: strin
         needed,
         dispensed,
         remaining: needed === null ? null : Math.max(0, needed - dispensed),
+        daysLeft: daysLeft(needed, item.durationDays, needed === null ? null : Math.max(0, needed - dispensed)),
         stock: options
           .filter((o) => o.drug.genericName.trim().toLowerCase() === item.genericName.trim().toLowerCase())
           .map((o) => ({

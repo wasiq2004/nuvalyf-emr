@@ -15,7 +15,7 @@ import { addDiagnosis } from "@/features/clinical/diagnoses.service";
 import { addPrescriptionItem } from "@/features/clinical/prescriptions.service";
 import { cancelLabOrder, listLabTestOptions, orderLab } from "@/features/clinical/lab.service";
 import { receiveStock } from "@/features/pharmacy/stock.service";
-import { getPrescriptionForDispensing, sell } from "@/features/pharmacy/sales.service";
+import { dispensingHistory, getPrescriptionForDispensing, sell } from "@/features/pharmacy/sales.service";
 import { addDaysToDateString, todayInTimeZone } from "@/lib/time";
 
 const TZ = "Asia/Kolkata";
@@ -78,7 +78,7 @@ describe("a consultation belongs to its doctor", () => {
 });
 
 describe("dispensing", () => {
-  it("never exceeds the prescribed course", async () => {
+  it("is the pharmacist's call beyond the course, but never beyond stock, and it is on record", async () => {
     const encounterId = await consultationFor(drA, "Course");
     const [para] = await as(adminId)((tx) => tx.update(drugs).set({ price: "2.00" }).where(eq(drugs.name, "Paracetamol 500")).returning({ id: drugs.id }));
     await as(drA)((tx) => addPrescriptionItem(tx, clinic.clinicId, encounterId, { drugId: para.id, dose: "1 tablet", frequency: "TDS", durationDays: 2, quantity: null }, drA));
@@ -89,9 +89,12 @@ describe("dispensing", () => {
     const item = (await as(drB)((tx) => getPrescriptionForDispensing(tx, prescriptionId!, today)))!.items[0];
     expect(item.needed).toBe(6);
     const line = (quantity: number) => ({ drugId: para.id, batchId: batch.batchId, quantity, prescriptionItemId: item.id });
-    await expect(as(drB)((tx) => sell(tx, clinic.clinicId, { prescriptionId, lines: [line(1000)], method: "cash", idempotencyKey: randomUUID() }, drB, today))).rejects.toThrow(/only 6 left/);
+    await expect(as(drB)((tx) => sell(tx, clinic.clinicId, { prescriptionId, lines: [line(1000)], method: "cash", idempotencyKey: randomUUID() }, drB, today))).rejects.toThrow(/Only 100 of/);
     await as(drB)((tx) => sell(tx, clinic.clinicId, { prescriptionId, lines: [line(4)], method: "cash", idempotencyKey: randomUUID() }, drB, today));
-    await expect(as(drB)((tx) => sell(tx, clinic.clinicId, { prescriptionId, lines: [line(3)], method: "cash", idempotencyKey: randomUUID() }, drB, today))).rejects.toThrow(/only 2 left/);
+    const { result } = await as(drB)((tx) => sell(tx, clinic.clinicId, { prescriptionId, lines: [{ ...line(3), dosage: { durationDays: 3 } }], method: "cash", idempotencyKey: randomUUID() }, drB, today));
+    expect(result).toMatchObject({ dispenseStatus: "dispensed", changedLines: 1 });
+    const given = await as(drB)((tx) => dispensingHistory(tx, prescriptionId!));
+    expect(given.reduce((n, l) => n + l.quantity, 0)).toBe(7);
   });
 });
 

@@ -8,6 +8,8 @@ export const DOCUMENT_PREFIX = {
   debitNote: "DN",
   receipt: "RC",
   payment: "PY",
+  admission: "IP",
+  inpatientReceipt: "IR",
 } as const;
 export type DocumentKind = keyof typeof DOCUMENT_PREFIX;
 

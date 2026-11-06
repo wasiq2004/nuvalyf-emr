@@ -40,6 +40,10 @@ export const encounters = appSchema.table(
     examination: text("examination"),
     plan: text("plan"),
     followUp: varchar("follow_up", { length: 200 }),
+    /** Written in triage, for the doctor to read before seeing the patient. */
+    nursingNotes: text("nursing_notes"),
+    triageNotesBy: uuid("triage_notes_by"),
+    triageNotesAt: timestamp("triage_notes_at", { withTimezone: true }),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
     finalizedAt: timestamp("finalized_at", { withTimezone: true }),
     finalizedBy: uuid("finalized_by"),
@@ -276,3 +280,37 @@ export const labOrders = appSchema.table(
   ],
 );
 
+
+/**
+ * One parameter's result. Name, unit, range and flag are copied in when it is
+ * saved, so a report reads the same forever. Append-only.
+ */
+export const labResults = appSchema.table(
+  "lab_results",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    orderId: uuid("order_id").notNull(),
+    patientId: uuid("patient_id").notNull(),
+    parameterId: uuid("parameter_id"),
+    name: varchar("name", { length: 120 }).notNull(),
+    section: varchar("section", { length: 80 }),
+    unit: varchar("unit", { length: 40 }),
+    sortOrder: integer("sort_order").notNull().default(0),
+    value: varchar("value", { length: 200 }).notNull(),
+    /** The value as a number, for trends; null for words. */
+    valueNumber: numeric("value_number", { precision: 14, scale: 4 }),
+    flag: varchar("flag", { length: 15 }).notNull().default("normal"),
+    /** The reference shown on the report, e.g. "13 - 17". */
+    referenceText: varchar("reference_text", { length: 80 }),
+    refLow: numeric("ref_low", { precision: 14, scale: 4 }),
+    refHigh: numeric("ref_high", { precision: 14, scale: 4 }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ name: "lab_results_order_fk", columns: [t.clinicId, t.orderId], foreignColumns: [labOrders.clinicId, labOrders.id] }),
+    index("lab_results_order_idx").on(t.orderId),
+    index("lab_results_patient_idx").on(t.clinicId, t.patientId, t.parameterId),
+    check("lab_results_flag_check", sql`${t.flag} IN ('normal', 'low', 'high', 'critical_low', 'critical_high', 'abnormal')`),
+  ],
+);

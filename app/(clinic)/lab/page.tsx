@@ -1,4 +1,6 @@
-import { CheckCircle2, FlaskConical, Hourglass, Siren } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, FlaskConical, Hourglass, Printer, Siren } from "lucide-react";
+import { buttonClass } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel, StatCard } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -7,8 +9,8 @@ import { requireClinic } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { formatRelative, formatTime } from "@/lib/format";
 import { todayInTimeZone, zonedTimeToUtc } from "@/lib/time";
-import { listLabWorklist, listRecentResults, type LabWorkItem } from "@/features/clinical/lab.service";
-import { EnterResultDialog } from "./LabActions";
+import { entryFieldsFor, listLabWorklist, listRecentResults, type LabWorkItem } from "@/features/clinical/lab.service";
+import { EnterResultDialog, ParameterResultDialog } from "./LabActions";
 
 export const metadata = { title: "Lab" };
 
@@ -31,10 +33,10 @@ export default async function LabPage() {
   const startOfDay = zonedTimeToUtc(today, "00:00", ctx.timezone);
   const now = new Date();
 
-  const { pending, done } = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => ({
-    pending: await listLabWorklist(tx, today),
-    done: await listRecentResults(tx, today, startOfDay),
-  }));
+  const { pending, done, fields } = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => {
+    const worklist = await listLabWorklist(tx, today);
+    return { pending: worklist, done: await listRecentResults(tx, today, startOfDay), fields: await entryFieldsFor(tx, worklist) };
+  });
 
   return (
     <PageShell>
@@ -79,7 +81,12 @@ export default async function LabPage() {
               key: "actions",
               header: "",
               align: "right",
-              cell: (r) => <EnterResultDialog id={r.id} testName={r.testName} patientName={r.patientName} unit={r.unit} referenceRange={r.referenceRange} />,
+              cell: (r) =>
+                fields.get(r.id)?.length ? (
+                  <ParameterResultDialog id={r.id} testName={r.testName} patientName={r.patientName} fields={fields.get(r.id)!} />
+                ) : (
+                  <EnterResultDialog id={r.id} testName={r.testName} patientName={r.patientName} unit={r.unit} referenceRange={r.referenceRange} />
+                ),
             },
           ]}
         />
@@ -109,7 +116,15 @@ export default async function LabPage() {
               header: "",
               align: "right",
               cell: (r) => (
-                <StatusBadge tone={r.resultFlag === "critical" ? "danger" : r.resultFlag === "abnormal" ? "warning" : "success"}>{r.resultFlag}</StatusBadge>
+                <span className="flex flex-wrap items-center justify-end gap-2">
+                  <StatusBadge tone={r.resultFlag === "critical" ? "danger" : r.resultFlag === "abnormal" ? "warning" : "success"}>{r.resultFlag}</StatusBadge>
+                  <a href={`/lab/report/${r.encounterId}`} target="_blank" rel="noopener" className={buttonClass("secondary", "sm")}>
+                    <Printer className="h-4 w-4" /> Report
+                  </a>
+                  <Link href={`/lab/patients/${r.patientId}`} className={buttonClass("ghost", "sm")}>
+                    History
+                  </Link>
+                </span>
               ),
             },
           ]}

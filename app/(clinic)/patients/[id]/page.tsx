@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ArrowLeft, CalendarPlus, Receipt, Stethoscope, UserRound } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BedDouble, CalendarPlus, FlaskConical, Receipt, Stethoscope, UserRound } from "lucide-react";
+import { openAdmissionFor } from "@/features/inpatient/inpatient.service";
 import { z } from "zod";
 import { ButtonLink } from "@/components/app/buttons";
 import { DetailList, EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
@@ -86,7 +87,8 @@ export default async function PatientPage({ params }: { params: Promise<{ id: st
           history: await consentHistory(tx, id),
         }
       : null;
-    return { patient, appointmentRows, visitRows, overrides, overridden, options, clinical, billing, consent };
+    const admission = hasModule(ctx, "inpatient") && can(ctx, "inpatient:read") ? await openAdmissionFor(tx, id) : null;
+    return { patient, appointmentRows, visitRows, overrides, overridden, options, clinical, billing, consent, admission };
   });
   if (!data) notFound();
 
@@ -125,6 +127,23 @@ export default async function PatientPage({ params }: { params: Promise<{ id: st
               />
             )}
             {can(ctx, "queue:checkin") && <WalkInDialog patientId={patient.id} doctors={data.options.doctors} services={data.options.services} />}
+            {data.admission ? (
+              <ButtonLink href={`/inpatient/${data.admission.id}`} variant="secondary">
+                <BedDouble className="h-4 w-4" /> Admitted · {data.admission.number}
+              </ButtonLink>
+            ) : (
+              hasModule(ctx, "inpatient") &&
+              can(ctx, "inpatient:admit") && (
+                <ButtonLink href={`/inpatient/admit?patientId=${patient.id}`} variant="secondary">
+                  <BedDouble className="h-4 w-4" /> Admit
+                </ButtonLink>
+              )
+            )}
+            {hasModule(ctx, "lab") && can(ctx, "encounter:read") && (
+              <ButtonLink href={`/lab/patients/${patient.id}`} variant="secondary">
+                <FlaskConical className="h-4 w-4" /> Lab results
+              </ButtonLink>
+            )}
             {can(ctx, "appointment:manage") && (
               <ButtonLink href={`/appointments/new?patientId=${patient.id}`}>
                 <CalendarPlus className="h-4 w-4" /> Book appointment

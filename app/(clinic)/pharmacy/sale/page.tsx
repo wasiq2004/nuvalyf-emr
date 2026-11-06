@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowLeft, ShoppingCart } from "lucide-react";
 import { PageHeader, PageShell } from "@/components/app/page";
-import { can, requireClinic } from "@/lib/auth/clinic-session";
+import { can, hasModule, requireClinic } from "@/lib/auth/clinic-session";
+import { todayInTimeZone } from "@/lib/time";
+import { admissionsForCharging } from "@/features/inpatient/inpatient.service";
 import { withClinic } from "@/lib/db";
 import { DEFAULT_LOCALE } from "@/lib/format";
 import { getClinicSettings } from "@/features/settings/settings.service";
@@ -15,6 +17,7 @@ export default async function CounterSalePage() {
   const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => ({
     clinic: await getClinicSettings(tx, ctx.clinicId),
     pharmacy: await getPharmacySettings(tx, ctx.clinicId),
+    admissions: hasModule(ctx, "inpatient") ? await admissionsForCharging(tx, todayInTimeZone(ctx.timezone)) : [],
   }));
   return (
     <PageShell>
@@ -42,6 +45,7 @@ export default async function CounterSalePage() {
         }}
         canOverrideDiscount={can(ctx, "pharmacy:cancel")}
         canSetCredit={can(ctx, "accounts:manage")}
+        admissions={data.admissions}
       />
     </PageShell>
   );

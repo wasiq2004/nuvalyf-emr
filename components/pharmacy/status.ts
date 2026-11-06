@@ -17,6 +17,7 @@ export const MONEY_METHOD_LABELS: Record<string, string> = {
   card: "Card",
   other: "Other",
   credit: "On account",
+  inpatient: "On the inpatient bill",
   account: "To the account",
   bank: "Bank transfer",
   cheque: "Cheque",

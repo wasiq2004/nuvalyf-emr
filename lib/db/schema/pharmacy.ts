@@ -121,6 +121,8 @@ export const pharmacySales = appSchema.table(
     total: numeric("total", { precision: 12, scale: 2 }).notNull(),
     method: varchar("method", { length: 10 }).notNull(),
     reference: varchar("reference", { length: 100 }),
+    /** Pharmacist's note when a prescription was filled differently. */
+    dispenseNote: varchar("dispense_note", { length: 300 }),
     soldBy: uuid("sold_by").notNull(),
     soldAt: timestamp("sold_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -132,7 +134,7 @@ export const pharmacySales = appSchema.table(
     foreignKey({ name: "pharmacy_sales_customer_fk", columns: [t.clinicId, t.customerId], foreignColumns: [pharmacyCustomers.clinicId, pharmacyCustomers.id] }),
     index("pharmacy_sales_sold_idx").on(t.clinicId, t.soldAt),
     index("pharmacy_sales_customer_idx").on(t.clinicId, t.customerId),
-    check("pharmacy_sales_method_check", sql`${t.method} IN ('cash', 'upi', 'card', 'other', 'credit')`),
+    check("pharmacy_sales_method_check", sql`${t.method} IN ('cash', 'upi', 'card', 'other', 'credit', 'inpatient')`),
     check("pharmacy_sales_total_check", sql`${t.total} >= 0 AND ${t.discount} >= 0 AND ${t.taxTotal} >= 0 AND ${t.roundOff} > -1 AND ${t.roundOff} < 1`),
     check("pharmacy_sales_document_check", sql`${t.documentType} IN ('tax_invoice', 'bill_of_supply', 'cash_memo')`),
     check("pharmacy_sales_credit_check", sql`${t.method} <> 'credit' OR ${t.customerId} IS NOT NULL`),
@@ -177,6 +179,18 @@ export const pharmacySaleItems = appSchema.table(
     schedule: varchar("schedule", { length: 5 }).notNull().default("none"),
     /** Batch cost per unit when sold, for margin. */
     unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
+    /**
+     * The pharmacy's copy (docs/PHARMACY_DISPENSING.md). What was actually
+     * given and how to take it; the doctor's signed prescription never changes.
+     */
+    dose: varchar("dose", { length: 60 }),
+    frequency: varchar("frequency", { length: 40 }),
+    durationDays: integer("duration_days"),
+    instructions: varchar("instructions", { length: 300 }),
+    /** none (counter sale), as_prescribed, changed, substituted or added. */
+    lineChange: varchar("line_change", { length: 15 }).notNull().default("none"),
+    /** What the doctor wrote for this line, when it was filled differently. */
+    prescribedText: varchar("prescribed_text", { length: 400 }),
   },
   (t) => [
     foreignKey({ name: "sale_items_sale_fk", columns: [t.clinicId, t.saleId], foreignColumns: [pharmacySales.clinicId, pharmacySales.id] }),
@@ -189,6 +203,7 @@ export const pharmacySaleItems = appSchema.table(
       sql`${t.taxable} IS NULL OR (${t.taxable} >= 0 AND ${t.taxable} + ${t.cgst} + ${t.sgst} + ${t.igst} = ${t.amount} - ${t.discount})`,
     ),
     check("sale_items_quantity_check", sql`${t.quantity} > 0`),
+    check("sale_items_line_change_check", sql`${t.lineChange} IN ('none', 'as_prescribed', 'changed', 'substituted', 'added')`),
     check(
       "sale_items_amount_check",
       sql`(${t.soldAs} = 'unit' AND ${t.packs} IS NULL AND ${t.amount} = ${t.unitPrice} * ${t.quantity})

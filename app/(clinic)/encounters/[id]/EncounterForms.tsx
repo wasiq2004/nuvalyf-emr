@@ -1,10 +1,12 @@
 "use client";
 
-import { HeartPulse } from "lucide-react";
+import { HeartPulse, Phone } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ActionForm, Field, SelectInput, SubmitButton, TextArea, TextInput } from "@/components/app/form";
 import { FormDialog } from "@/components/app/dialogs";
-import { recordVitalsAction, saveNotesAction, addAmendmentAction, savePrivateNoteAction } from "@/features/clinical/clinical.actions";
+import { recordVitalsAction, saveNotesAction, saveTriageNotesAction, addAmendmentAction, savePrivateNoteAction } from "@/features/clinical/clinical.actions";
+import { updatePatientContactAction } from "@/features/patients/patients.actions";
 import { orderLabAction } from "@/features/clinical/lab.actions";
 import { FLAG_LABELS, VITAL_FIELDS, VITAL_LABELS, type VitalFlag, type VitalKey } from "@/features/clinical/vital-rules";
 
@@ -45,6 +47,68 @@ export function VitalsDialog({ encounterId, primary = false }: { encounterId: st
           </Field>
           <div className="flex justify-end">
             <SubmitButton>Save vitals</SubmitButton>
+          </div>
+        </ActionForm>
+      )}
+    </FormDialog>
+  );
+}
+
+/** What the nurse writes for the doctor: never the doctor's own notes. */
+export function TriageNotesForm({ encounterId, values }: { encounterId: string; values: { chiefComplaint: string; nursingNotes: string } }) {
+  return (
+    <ActionForm action={saveTriageNotesAction} successMessage="Triage notes saved">
+      <input type="hidden" name="encounterId" value={encounterId} />
+      <Field label="Chief complaint" name="chiefComplaint">
+        <TextArea name="chiefComplaint" rows={2} defaultValue={values.chiefComplaint} placeholder="In the patient's words" className="min-h-16" />
+      </Field>
+      <Field label="Nursing notes" name="nursingNotes">
+        <TextArea name="nursingNotes" rows={3} defaultValue={values.nursingNotes} placeholder="Anything the doctor should know before seeing the patient" />
+      </Field>
+      <div className="flex justify-end">
+        <SubmitButton variant="secondary">Save triage notes</SubmitButton>
+      </div>
+    </ActionForm>
+  );
+}
+
+export type ContactValues = { id: string; mobile: string; altPhone: string; email: string; addressLine: string; city: string };
+
+export function PatientContactDialog({ values }: { values: ContactValues }) {
+  return (
+    <FormDialog
+      variant="secondary"
+      size="sm"
+      trigger={
+        <>
+          <Phone className="h-4 w-4" /> Update contact
+        </>
+      }
+      title="Contact details"
+      description="Name, age and sex are changed at the front desk."
+    >
+      {(close) => (
+        <ActionForm action={updatePatientContactAction} successMessage="Contact details saved" onSuccess={close}>
+          <input type="hidden" name="id" value={values.id} />
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Mobile" name="mobile">
+              <TextInput name="mobile" type="tel" defaultValue={values.mobile} />
+            </Field>
+            <Field label="Other phone" name="altPhone">
+              <TextInput name="altPhone" type="tel" defaultValue={values.altPhone} />
+            </Field>
+          </div>
+          <Field label="Email" name="email">
+            <TextInput name="email" type="email" defaultValue={values.email} />
+          </Field>
+          <Field label="Address" name="addressLine">
+            <TextInput name="addressLine" defaultValue={values.addressLine} />
+          </Field>
+          <Field label="City" name="city">
+            <TextInput name="city" defaultValue={values.city} />
+          </Field>
+          <div className="flex justify-end">
+            <SubmitButton>Save</SubmitButton>
           </div>
         </ActionForm>
       )}
@@ -118,10 +182,42 @@ export function PrivateNoteForm({ encounterId, text }: { encounterId: string; te
   );
 }
 
-export function LabOrderForm({ encounterId, tests }: { encounterId: string; tests: { id: string; name: string; sampleType: string | null }[] }) {
+export function LabOrderForm({
+  encounterId,
+  tests,
+  frequent,
+}: {
+  encounterId: string;
+  tests: { id: string; name: string; sampleType: string | null }[];
+  frequent: { id: string; name: string }[];
+}) {
+  const router = useRouter();
+  async function quickOrder(testId: string, name: string) {
+    const result = await orderLabAction({ encounterId, testId });
+    if (!result.ok) return toast.error(result.error);
+    toast.success(`${name} ordered`);
+    router.refresh();
+  }
   return (
     <ActionForm action={orderLabAction} successMessage="Test ordered" resetOnSuccess>
       <input type="hidden" name="encounterId" value={encounterId} />
+      {frequent.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">Frequently ordered</p>
+          <div className="flex flex-wrap gap-2">
+            {frequent.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => quickOrder(t.id, t.name)}
+                className="rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-800 transition-colors hover:border-(--accent-soft-border) hover:bg-(--accent-soft) dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200"
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
         <Field label="Test" name="testId" required>
           <SelectInput

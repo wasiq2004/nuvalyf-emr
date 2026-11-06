@@ -276,9 +276,8 @@ describe("sales take stock down, loose or by the strip", () => {
           today,
         ),
       );
-    // A strip of 15 is more than the 9-tablet course.
-    await expect(dispense(1, "pack")).rejects.toThrow(/only 9 left to dispense/);
-    const { result } = await dispense(9, "unit");
+    // A whole strip of 15 on a 9-tablet course: the pharmacist's call.
+    const { result } = await dispense(1, "pack");
     expect(result.dispenseStatus).toBe("dispensed");
   });
 });

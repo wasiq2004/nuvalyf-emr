@@ -14,11 +14,13 @@ export function QueueBoard<T extends QueueItem>({
   now,
   linkPatients,
   renderActions,
+  renderDetail,
 }: {
   items: T[];
   now: Date;
   linkPatients: boolean;
   renderActions?: (item: T, index: number, routineIndex: number, routineCount: number) => React.ReactNode;
+  renderDetail?: (item: T) => React.ReactNode;
 }) {
   const routine = items.filter((i) => !i.isEmergency && i.status === "waiting");
 
@@ -72,6 +74,7 @@ export function QueueBoard<T extends QueueItem>({
                     <Phone className="h-3 w-3" /> Brought in by {item.companionPhone}
                   </p>
                 )}
+                {renderDetail?.(item)}
               </div>
             </div>
 

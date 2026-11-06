@@ -8,9 +8,10 @@ import { buttonClass } from "@/components/app/buttons";
 import { inputClass } from "@/components/app/form";
 import { addDiagnosisAction, searchDiagnosisCodesAction } from "@/features/clinical/clinical.actions";
 import type { DiagnosisOption } from "@/features/clinical/diagnoses.service";
+import type { DiagnosisSuggestion } from "@/features/clinical/suggestions.service";
 import { cn } from "@/lib/utils";
 
-export function DiagnosisPicker({ encounterId, favourites }: { encounterId: string; favourites: DiagnosisOption[] }) {
+export function DiagnosisPicker({ encounterId, favourites, frequent }: { encounterId: string; favourites: DiagnosisOption[]; frequent: DiagnosisSuggestion[] }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [query, setQuery] = useState("");
@@ -70,13 +71,36 @@ export function DiagnosisPicker({ encounterId, favourites }: { encounterId: stri
         />
       </div>
 
+      {!results && frequent.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Frequently used</p>
+          <ul className="flex flex-wrap gap-2">
+            {frequent.map((d) => (
+              <li key={d.code} className="max-w-full">
+                <button
+                  type="button"
+                  disabled={pending !== null}
+                  onClick={() => add(d.code, d.label)}
+                  className="inline-flex max-w-full items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-left text-sm transition-colors hover:border-(--accent-soft-border) hover:bg-(--accent-soft) disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-950"
+                >
+                  <span className="font-mono text-xs font-semibold text-(--accent-text)">{d.code}</span>
+                  <span className="truncate text-zinc-700 dark:text-zinc-300">{d.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">{results ? "Matches" : "Clinic favourites"}</p>
         {shown.length === 0 ? (
           <p className="text-sm text-zinc-500">{results ? "No codes match. Add it as a custom code below." : "No favourites set up yet."}</p>
         ) : (
           <ul className="flex flex-wrap gap-2">
-            {shown.map((d) => (
+            {shown
+              .filter((d) => results || !frequent.some((f) => f.code === d.code))
+              .map((d) => (
               <li key={d.id} className="max-w-full">
                 <button
                   type="button"

@@ -1,24 +1,31 @@
 import Link from "next/link";
 import { forbidden } from "next/navigation";
-import { AlertTriangle, Banknote, ClipboardList, PackageX, Pill, ShoppingCart } from "lucide-react";
+import { AlertTriangle, Banknote, ClipboardList, PackageX, Pill, Search, ShoppingCart } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel, StatCard } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
 import { AutoRefresh } from "@/components/app/auto-refresh";
 import { can, recordDenied, requireClinic } from "@/lib/auth/clinic-session";
+import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
-import { formatRelative, formatTime } from "@/lib/format";
+import { getRequestMeta } from "@/lib/request";
+import { formatDate, formatRelative, formatTime } from "@/lib/format";
+import { inputClass } from "@/components/app/styles";
+import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/money";
 import { addDaysToDateString, todayInTimeZone, zonedTimeToUtc } from "@/lib/time";
 import { getClinicSettings } from "@/features/settings/settings.service";
-import { listPrescriptionQueue, salesBetween, salesTotal } from "@/features/pharmacy/sales.service";
+import { findPrescriptionsForPatient, listPrescriptionQueue, salesBetween, salesTotal } from "@/features/pharmacy/sales.service";
 import { listStock } from "@/features/pharmacy/stock.service";
 import { MONEY_METHOD_LABELS } from "@/components/pharmacy/status";
 
 export const metadata = { title: "Pharmacy" };
 
-export default async function PharmacyPage() {
+const STATUS_LABELS: Record<string, string> = { pending: "To fill", partial: "Part filled", dispensed: "Dispensed", not_required: "Closed" };
+const STATUS_TONES: Record<string, "info" | "warning" | "success" | "neutral"> = { pending: "info", partial: "warning", dispensed: "success", not_required: "neutral" };
+
+export default async function PharmacyPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const ctx = await requireClinic({ module: "pharmacy" });
   const canDispense = can(ctx, "pharmacy:dispense");
   const canSell = can(ctx, "pharmacy:sell");
@@ -31,10 +38,19 @@ export default async function PharmacyPage() {
   const dayEnd = zonedTimeToUtc(addDaysToDateString(today, 1), "00:00", ctx.timezone);
   const since = zonedTimeToUtc(addDaysToDateString(today, -30), "00:00", ctx.timezone);
   const now = new Date();
+  const search = ((await searchParams).q ?? "").trim().slice(0, 100);
 
+  const meta = await getRequestMeta();
   const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => ({
     currency: (await getClinicSettings(tx, ctx.clinicId)).currency,
     queue: canDispense ? await listPrescriptionQueue(tx, today, since) : [],
+    found:
+      canDispense && search
+        ? await findPrescriptionsForPatient(tx, search, today).then(async (rows) => {
+            await recordAudit(tx, { clinicId: ctx.clinicId, actorUserId: ctx.userId, action: "PATIENT_SEARCH", details: { query: search, results: rows.length, from: "pharmacy" }, meta });
+            return rows;
+          })
+        : [],
     sales: await salesBetween(tx, dayStart, dayEnd),
     totals: await salesTotal(tx, dayStart, dayEnd),
     stock: await listStock(tx, today, now),
@@ -67,7 +83,68 @@ export default async function PharmacyPage() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <div className="min-w-0 xl:col-span-2">
+        <div className="min-w-0 space-y-6 xl:col-span-2">
+          {canDispense && (
+            <form action="/pharmacy" className="relative">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" aria-hidden />
+              <input
+                type="search"
+                name="q"
+                defaultValue={search}
+                aria-label="Find a patient's prescription"
+                placeholder="Patient name, phone or record number"
+                autoComplete="off"
+                className={cn(inputClass, "h-12 pl-10 text-base")}
+              />
+            </form>
+          )}
+          {canDispense && search && (
+            <Panel flush title={`Prescriptions for “${search}”`} description="Newest first, including older and part-filled ones.">
+              <DataTable
+                rows={data.found}
+                rowKey={(q) => q.prescriptionId}
+                empty={<EmptyState icon={ClipboardList} title="No prescriptions found" description="Check the spelling, or try the phone number or record number." />}
+                columns={[
+                  {
+                    key: "patient",
+                    header: "Patient",
+                    cell: (q) => (
+                      <div>
+                        <p className="font-medium text-zinc-900 dark:text-zinc-100">{q.patientName}</p>
+                        <p className="text-xs text-zinc-500">
+                          {q.patientMrn} · {q.patientAge ?? "—"} y
+                        </p>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "from",
+                    header: "From",
+                    hideOnMobile: true,
+                    cell: (q) => (
+                      <div className="text-sm">
+                        {q.doctorName}
+                        <p className="text-xs text-zinc-500">
+                          {formatDate(q.signedAt, ctx.timezone)} · {q.items} {q.items === 1 ? "item" : "items"}
+                        </p>
+                      </div>
+                    ),
+                  },
+                  { key: "status", header: "", cell: (q) => <StatusBadge tone={STATUS_TONES[q.dispenseStatus] ?? "neutral"}>{STATUS_LABELS[q.dispenseStatus] ?? q.dispenseStatus}</StatusBadge> },
+                  {
+                    key: "open",
+                    header: "",
+                    align: "right",
+                    cell: (q) => (
+                      <ButtonLink href={`/pharmacy/rx/${q.prescriptionId}`} variant="secondary" size="sm">
+                        {q.dispenseStatus === "pending" || q.dispenseStatus === "partial" ? "Fill" : "View"}
+                      </ButtonLink>
+                    ),
+                  },
+                ]}
+              />
+            </Panel>
+          )}
           {canDispense && (
             <Panel flush title="Prescription queue" description="Signed prescriptions from the last 30 days, oldest first.">
               <DataTable
@@ -123,7 +200,7 @@ export default async function PharmacyPage() {
             </Panel>
           )}
 
-          <Panel flush title="Today's sales" className={canDispense ? "mt-6" : undefined}>
+          <Panel flush title="Today's sales">
             {data.sales.length === 0 ? (
               <div className="p-6 lg:p-8">
                 <EmptyState icon={Banknote} title="No sales yet today" />

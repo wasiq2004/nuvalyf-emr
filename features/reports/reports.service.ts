@@ -27,12 +27,15 @@ export async function collectionsByDay(tx: Tx, range: ReportRange) {
                0::numeric as pharmacy
         from app.payments where received_at >= ${range.from.toISOString()}::timestamptz and received_at < ${range.to.toISOString()}::timestamptz
         union all
+        select (received_at at time zone ${range.timeZone})::date, case when kind = 'refund' then -amount else amount end, 0::numeric
+        from app.admission_payments where received_at >= ${range.from.toISOString()}::timestamptz and received_at < ${range.to.toISOString()}::timestamptz
+        union all
         -- Pharmacy money in: paid sales, refunds paid out, receipts on account (credit sales are not cash).
         select (sold_at at time zone ${range.timeZone})::date, 0::numeric, total
-        from app.pharmacy_sales where method <> 'credit' and sold_at >= ${range.from.toISOString()}::timestamptz and sold_at < ${range.to.toISOString()}::timestamptz
+        from app.pharmacy_sales where method not in ('credit', 'inpatient') and sold_at >= ${range.from.toISOString()}::timestamptz and sold_at < ${range.to.toISOString()}::timestamptz
         union all
         select (created_at at time zone ${range.timeZone})::date, 0::numeric, -total
-        from app.sale_returns where refund_method <> 'account' and created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
+        from app.sale_returns where refund_method not in ('account', 'inpatient') and created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
         union all
         select (created_at at time zone ${range.timeZone})::date, 0::numeric, amount
         from app.customer_receipts where created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
@@ -51,9 +54,12 @@ export async function collectionsByMethod(tx: Tx, range: ReportRange) {
         select method, case when kind = 'payment' then amount else -amount end as billing, 0::numeric as pharmacy
         from app.payments where received_at >= ${range.from.toISOString()}::timestamptz and received_at < ${range.to.toISOString()}::timestamptz
         union all
-        select method, 0::numeric, total from app.pharmacy_sales where method <> 'credit' and sold_at >= ${range.from.toISOString()}::timestamptz and sold_at < ${range.to.toISOString()}::timestamptz
+        select method, case when kind = 'refund' then -amount else amount end, 0::numeric
+        from app.admission_payments where received_at >= ${range.from.toISOString()}::timestamptz and received_at < ${range.to.toISOString()}::timestamptz
         union all
-        select refund_method, 0::numeric, -total from app.sale_returns where refund_method <> 'account' and created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
+        select method, 0::numeric, total from app.pharmacy_sales where method not in ('credit', 'inpatient') and sold_at >= ${range.from.toISOString()}::timestamptz and sold_at < ${range.to.toISOString()}::timestamptz
+        union all
+        select refund_method, 0::numeric, -total from app.sale_returns where refund_method not in ('account', 'inpatient') and created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
         union all
         select method, 0::numeric, amount from app.customer_receipts where created_at >= ${range.from.toISOString()}::timestamptz and created_at < ${range.to.toISOString()}::timestamptz
       ) money

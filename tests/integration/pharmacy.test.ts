@@ -14,7 +14,8 @@ import { addWalkIn } from "@/features/scheduling/booking.service";
 import { callPatient, finalizeEncounter } from "@/features/clinical/encounters.service";
 import { addPrescriptionItem } from "@/features/clinical/prescriptions.service";
 import { adjustStock, listStock, receiveStock } from "@/features/pharmacy/stock.service";
-import { closePrescription, getPrescriptionForDispensing, listPrescriptionQueue, sell } from "@/features/pharmacy/sales.service";
+import { closePrescription, dispensingHistory, findPrescriptionsForPatient, getPrescriptionForDispensing, listPrescriptionQueue, sell } from "@/features/pharmacy/sales.service";
+import { addAllergy } from "@/features/clinical/allergies.service";
 import { answerQuery, listOpenQueriesFor, raiseQuery } from "@/features/pharmacy/queries.service";
 import { createOrder, decideOrder, receiveOrder, saveSupplier, setOrderItem, submitOrder } from "@/features/pharmacy/purchasing.service";
 import { addDaysToDateString, todayInTimeZone } from "@/lib/time";
@@ -195,7 +196,7 @@ describe("dispensing", () => {
     );
     expect(first.result.dispenseStatus).toBe("partial");
 
-    // Same generic, different strength-brand: allowed. A different medicine: refused.
+    // Same generic, different strength-brand: allowed.
     const p500 = await batchOf(drug("Paracetamol 500"), "P500-SOON");
     const second = await asPharmacist()((tx) =>
       sell(tx, clinic.clinicId, { prescriptionId: rxId, lines: [{ drugId: drug("Paracetamol 500"), batchId: p500, quantity: 2, prescriptionItemId: item.id }], method: "cash", idempotencyKey: randomUUID() }, pharmacistId, today),
@@ -204,14 +205,6 @@ describe("dispensing", () => {
     expect((await asPharmacist()((tx) => listPrescriptionQueue(tx, today, new Date(0)))).map((q) => q.prescriptionId)).not.toContain(rxId);
 
     const other = await signedPrescription([{ name: "Paracetamol 650" }]);
-    const otherItem = (await asPharmacist()((tx) => getPrescriptionForDispensing(tx, other, today)))!.items[0];
-    const cet = await batchOf(drug("Cetirizine 10"), "CET-A");
-    await expect(
-      asPharmacist()((tx) =>
-        sell(tx, clinic.clinicId, { prescriptionId: other, lines: [{ drugId: drug("Cetirizine 10"), batchId: cet, quantity: 1, prescriptionItemId: otherItem.id }], method: "cash", idempotencyKey: randomUUID() }, pharmacistId, today),
-      ),
-    ).rejects.toThrow(/same medicine or the same generic/);
-
     await asPharmacist()((tx) => closePrescription(tx, other));
     await expect(asPharmacist()((tx) => closePrescription(tx, other))).rejects.toThrow(AppError);
     // The prescription itself stayed untouched apart from its pharmacy status.
@@ -262,3 +255,121 @@ async function expectLocked(promise: Promise<unknown>) {
   );
   expect(isLockedRecord(error)).toBe(true);
 }
+
+describe("the pharmacy's copy of a prescription", () => {
+  const rxPatient = async (rxId: string) => (await owner`select patient_id from app.prescriptions where id = ${rxId}`)[0].patient_id as string;
+  const doctorItem = async (rxId: string) => (await owner`select dose, frequency, duration_days, drug_name from app.prescription_items where prescription_id = ${rxId}`)[0];
+
+  it("sells 15 of 30 prescribed days; the rest stays open for a later visit", async () => {
+    await receive("Paracetamol 650", "COPY-A", 200);
+    const batchId = await batchOf(drug("Paracetamol 650"), "COPY-A");
+    const rxId = await signedPrescription([{ name: "Paracetamol 650", dose: "1 tablet", frequency: "BD", days: 30 }]);
+    const signed = await doctorItem(rxId);
+    const view = await asPharmacist()((tx) => getPrescriptionForDispensing(tx, rxId, today));
+    const item = view!.items[0];
+    expect(item).toMatchObject({ needed: 60, remaining: 60, daysLeft: 30 });
+
+    const { result } = await asPharmacist()((tx) =>
+      sell(
+        tx,
+        clinic.clinicId,
+        {
+          prescriptionId: rxId,
+          lines: [{ drugId: drug("Paracetamol 650"), batchId, quantity: 30, prescriptionItemId: item.id, dosage: { durationDays: 15 } }],
+          method: "cash",
+          dispenseNote: "Buying the rest next month",
+          idempotencyKey: randomUUID(),
+        },
+        pharmacistId,
+        today,
+      ),
+    );
+    expect(result).toMatchObject({ dispenseStatus: "partial", changedLines: 1 });
+    const [line] = await owner`select duration_days, dose, line_change, prescribed_text from app.pharmacy_sale_items where sale_id = ${result.saleId}`;
+    expect(line).toMatchObject({ duration_days: 15, dose: "1 tablet", line_change: "changed" });
+    expect(line.prescribed_text).toContain("30 days");
+    expect(await doctorItem(rxId)).toEqual(signed);
+
+    // Weeks later: found by name, even though it has left the queue window.
+    const name = (await owner`select first_name from app.patients where id = ${await rxPatient(rxId)}`)[0].first_name as string;
+    const found = await asPharmacist()((tx) => findPrescriptionsForPatient(tx, name, today));
+    expect(found.find((f) => f.prescriptionId === rxId)).toMatchObject({ dispenseStatus: "partial" });
+    const again = (await asPharmacist()((tx) => getPrescriptionForDispensing(tx, rxId, today)))!.items[0];
+    expect(again).toMatchObject({ dispensed: 30, remaining: 30, daysLeft: 15 });
+    const second = await asPharmacist()((tx) =>
+      sell(tx, clinic.clinicId, { prescriptionId: rxId, lines: [{ drugId: drug("Paracetamol 650"), batchId, quantity: 30, prescriptionItemId: item.id, dosage: { durationDays: 15 } }], method: "cash", idempotencyKey: randomUUID() }, pharmacistId, today),
+    );
+    expect(second.result.dispenseStatus).toBe("dispensed");
+    expect(await asPharmacist()((tx) => dispensingHistory(tx, rxId))).toHaveLength(2);
+  });
+
+  it("changes the dose, swaps to another medicine and adds one, with no doctor approval", async () => {
+    await receive("Cetirizine 10", "COPY-C", 50);
+    const cetBatch = await batchOf(drug("Cetirizine 10"), "COPY-C");
+    const rxId = await signedPrescription([{ name: "Paracetamol 650", dose: "1 tablet", frequency: "TDS", days: 2 }]);
+    const item = (await asPharmacist()((tx) => getPrescriptionForDispensing(tx, rxId, today)))!.items[0];
+    const { result } = await asPharmacist()((tx) =>
+      sell(
+        tx,
+        clinic.clinicId,
+        {
+          prescriptionId: rxId,
+          // Another generic entirely replaces the doctor's line, at a new dose.
+          lines: [{ drugId: drug("Cetirizine 10"), batchId: cetBatch, quantity: 3, prescriptionItemId: item.id, dosage: { dose: "1 tablet", frequency: "OD", durationDays: 3 } }],
+          method: "cash",
+          idempotencyKey: randomUUID(),
+        },
+        pharmacistId,
+        today,
+      ),
+    );
+    const [swap] = await owner`select line_change, prescribed_text, frequency from app.pharmacy_sale_items where sale_id = ${result.saleId}`;
+    expect(swap.line_change).toBe("substituted");
+    expect(swap.frequency).toBe("OD");
+    expect(swap.prescribed_text).toContain("Paracetamol 650");
+
+    const added = await signedPrescription([{ name: "Paracetamol 650", dose: "1 tablet", frequency: "TDS", days: 2 }]);
+    const addedItem = (await asPharmacist()((tx) => getPrescriptionForDispensing(tx, added, today)))!.items[0];
+    const p650 = await batchOf(drug("Paracetamol 650"), "COPY-A");
+    const sale = await asPharmacist()((tx) =>
+      sell(
+        tx,
+        clinic.clinicId,
+        {
+          prescriptionId: added,
+          lines: [
+            { drugId: drug("Paracetamol 650"), batchId: p650, quantity: 6, prescriptionItemId: addedItem.id },
+            { drugId: drug("Cetirizine 10"), batchId: cetBatch, quantity: 2, prescriptionItemId: null, dosage: { dose: "1 tablet", frequency: "HS" } },
+          ],
+          method: "cash",
+          idempotencyKey: randomUUID(),
+        },
+        pharmacistId,
+        today,
+      ),
+    );
+    const changes = await owner`select line_change from app.pharmacy_sale_items where sale_id = ${sale.result.saleId} order by line_change`;
+    expect(changes.map((c) => c.line_change)).toEqual(["added", "as_prescribed"]);
+  });
+
+  it("still checks a changed medicine against the patient's allergies", async () => {
+    await receive("Amoxicillin 500", "COPY-M", 20);
+    const amox = await batchOf(drug("Amoxicillin 500"), "COPY-M");
+    const rxId = await signedPrescription([{ name: "Paracetamol 650", dose: "1 tablet", frequency: "TDS", days: 2 }]);
+    const patientId = await rxPatient(rxId);
+    await asPharmacist()((tx) => addAllergy(tx, clinic.clinicId, patientId, { substance: "Penicillin", allergyClassId: null, severity: "severe" }, pharmacistId));
+    const item = (await asPharmacist()((tx) => getPrescriptionForDispensing(tx, rxId, today)))!.items[0];
+    const swap = (warningsChecked: boolean) =>
+      asPharmacist()((tx) =>
+        sell(
+          tx,
+          clinic.clinicId,
+          { prescriptionId: rxId, lines: [{ drugId: drug("Amoxicillin 500"), batchId: amox, quantity: 6, prescriptionItemId: item.id }], method: "cash", warningsChecked, idempotencyKey: randomUUID() },
+          pharmacistId,
+          today,
+        ),
+      );
+    await expect(swap(false)).rejects.toThrow(/Recorded allergy: Penicillin/);
+    await expect(swap(true)).resolves.toBeTruthy();
+  });
+});

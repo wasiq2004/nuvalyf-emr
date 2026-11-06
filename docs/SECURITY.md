@@ -101,7 +101,7 @@ An independent review of the whole codebase against the guarantees above found t
 | 4 | Any doctor could edit another doctor's open consultation | Medium | Ownership enforced; explicit, audited take-over |
 | 5 | A Clinic Admin could grant the Analyst role patient permissions, defeating de-identification | Medium | The Analyst role may hold only `analytics:*` |
 | 6 | Some error logs could include query parameters (patient data) | Medium | `describeError` strips parameters and values |
-| 7 | Pharmacy could dispense more than the prescribed course | Medium | Sales refuse quantities above what remains on the prescription |
+| 7 | Pharmacy could dispense more than the prescribed course | Medium | Originally refused. **Removed at the client's request on 2026-11-06:** the pharmacist decides. Now recorded, not prevented; see [PHARMACY_DISPENSING.md](PHARMACY_DISPENSING.md) |
 | 8 | The tenant detail page used the provisioner pool for plain operators | Low | Provisioner only for `platform_admin` |
 | 9 | Password changes had no rate limit | Low | 5 per account per 15 minutes |
 | 10 | Analytics accepted partial months and 1-year age steps, allowing differencing attacks; CSV header not escaped | Low | Whole months only, 5-year steps, k-anonymous rows by (age band, sex), escaped header |

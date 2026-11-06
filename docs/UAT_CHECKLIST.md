@@ -68,6 +68,10 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 4.8 | Prescription PDF is correct and legible, including the doctor's registration number | ✓ | | |
 | 4.9 | A second doctor cannot edit the first doctor's open consultation without "Take over" | | | |
 | 4.10 | Private note is not visible to another doctor or the Clinic Admin | | | |
+| 4.11 | Nurse saves chief complaint, nursing notes and contact details; cannot edit diagnosis or prescription | ✓ | | |
+| 4.12 | Doctor's queue shows the latest vitals with who took them and when | ✓ | | |
+| 4.13 | Doctor's frequent medicines appear; a suggestion fills the form and the allergy check still runs | ✓ | | |
+| 4.14 | Repeat last prescription leaves out anything with a serious warning | | | |
 
 ## 5. Lab (if in plan)
 
@@ -76,6 +80,10 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 5.1 | Ordered test appears on the lab worklist within a minute | ✓ | | |
 | 5.2 | Result entered; it appears in the doctor's "Unread results" | ✓ | | |
 | 5.3 | Critical result is clearly marked | ✓ | | |
+| 5.4 | CBC shows its own parameters and the right range for the patient's sex | ✓ | | |
+| 5.5 | Lab report prints correctly, with out-of-range values marked | ✓ | | |
+| 5.6 | Pathologist has reviewed the reference ranges for every test in use | ✓ | | |
+| 5.7 | Patient's results by date and trend chart are correct | | | |
 
 ## 6. Billing
 
@@ -107,6 +115,30 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 7.13 | The old software's item list and stock imported from CSV; a file with a bad row imports nothing | ✓ | | |
 | 7.14 | Counter sale of whole strips and loose tablets in one sale: strip at its MRP, tablets at the tablet price; stock falls by the right number of tablets | ✓ | | |
 | 7.15 | A strip cannot be dispensed against a course shorter than the strip; loose tablets can | ✓ | | |
+
+## 7a. Inpatient (if in plan)
+
+| # | Check | Must | ✓ | Notes |
+| --- | --- | --- | --- | --- |
+| 7a.1 | Patient admitted from their record; bed shows occupied; not in the outpatient queue | ✓ | | |
+| 7a.2 | Toggle on: a 30-hour stay is charged 30 hours at daily rate / 24 | ✓ | | |
+| 7a.3 | Toggle off: a 26-hour stay is charged 48 hours | ✓ | | |
+| 7a.4 | Bed change charges each bed at its own rate | ✓ | | |
+| 7a.5 | Advance and part payments reduce the balance; a double-click records one | ✓ | | |
+| 7a.6 | Pharmacy sale and lab test appear on the bill | ✓ | | |
+| 7a.7 | Discharge with a balance due is allowed; the balance shows on the summary | ✓ | | |
+| 7a.8 | Summary drafts from the record, needs Condition at discharge, and locks when signed | ✓ | | |
+| 7a.9 | Clinic Admin can change hours, rate or discount, each with a reason; others cannot | ✓ | | |
+
+## 7b. Pharmacy edits
+
+| # | Check | Must | ✓ | Notes |
+| --- | --- | --- | --- | --- |
+| 7b.1 | Patient found by name; prescription opens, including an older part-filled one | ✓ | | |
+| 7b.2 | 15 of 30 days sold; the rest stays Part filled and can be collected later | ✓ | | |
+| 7b.3 | Dose edited, medicine swapped and added; invoice shows what was given | ✓ | | |
+| 7b.4 | Doctor's signed prescription is unchanged; doctor sees what was given | ✓ | | |
+| 7b.5 | A swapped medicine the patient is allergic to shows a warning that must be ticked | ✓ | | |
 
 ## 8. Messaging (if in plan)
 

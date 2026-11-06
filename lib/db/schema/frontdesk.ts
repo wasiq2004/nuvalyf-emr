@@ -187,7 +187,7 @@ export const visits = appSchema.table(
     index("visits_patient_idx").on(t.clinicId, t.patientId),
     check(
       "visits_status_check",
-      sql`${t.status} IN ('waiting', 'in_triage', 'ready', 'with_doctor', 'completed', 'left', 'cancelled')`,
+      sql`${t.status} IN ('waiting', 'in_triage', 'ready', 'with_doctor', 'completed', 'left', 'cancelled', 'inpatient')`,
     ),
   ],
 );

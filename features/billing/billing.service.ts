@@ -399,6 +399,7 @@ export async function visitsToBill(tx: Tx, today: string): Promise<VisitToBill[]
         eq(visits.visitDate, today),
         inArray(visits.status, ["completed"]),
         sql`not exists (select 1 from ${invoices} where ${invoices.visitId} = ${visits.id} and ${invoices.status} <> 'void')`,
+        sql`not exists (select 1 from app.admissions a where a.visit_id = ${visits.id})`,
       ),
     )
     .orderBy(asc(visits.completedAt));

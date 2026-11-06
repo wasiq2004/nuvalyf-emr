@@ -109,7 +109,8 @@ BEGIN
   FOREACH tbl IN ARRAY ARRAY[
     'users', 'roles', 'role_permissions', 'user_roles', 'clinic_settings',
     'drugs', 'allergy_classes', 'drug_allergy_classes', 'drug_interactions',
-    'prescribing_presets', 'diagnosis_codes', 'vital_ranges', 'lab_tests'
+    'prescribing_presets', 'diagnosis_codes', 'vital_ranges', 'lab_tests',
+    'lab_test_parameters', 'lab_parameter_ranges'
   ] LOOP
     EXECUTE format('DROP POLICY IF EXISTS provisioner_access ON app.%I', tbl);
     EXECUTE format(
@@ -323,7 +324,7 @@ CREATE TRIGGER allergies_no_delete BEFORE DELETE ON app.allergies
 DO $$
 DECLARE tbl text;
 BEGIN
-  FOREACH tbl IN ARRAY ARRAY['allergy_history', 'encounter_amendments'] LOOP
+  FOREACH tbl IN ARRAY ARRAY['allergy_history', 'encounter_amendments', 'lab_results', 'admission_payments'] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON app.%I', tbl || '_append_only', tbl);
     EXECUTE format(
       'CREATE TRIGGER %I BEFORE UPDATE OR DELETE ON app.%I FOR EACH ROW EXECUTE FUNCTION sys.reject_change()',
@@ -331,6 +332,21 @@ BEGIN
     );
   END LOOP;
 END $$;
+
+-- A signed discharge summary is a legal record: it can never change.
+CREATE OR REPLACE FUNCTION app.discharge_summary_guard() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF OLD.status = 'signed' THEN
+    RAISE EXCEPTION 'A signed discharge summary cannot be changed'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END $$;
+DROP TRIGGER IF EXISTS discharge_summaries_guard ON app.discharge_summaries;
+CREATE TRIGGER discharge_summaries_guard BEFORE UPDATE OR DELETE ON app.discharge_summaries
+  FOR EACH ROW EXECUTE FUNCTION app.discharge_summary_guard();
 
 -- Private notes are not part of the clinical record: only their author can
 -- read or write them - not a Clinic Admin, not another doctor.

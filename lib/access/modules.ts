@@ -2,7 +2,7 @@
 // Core features (patients, appointments, queue, consultations, prescriptions,
 // billing, audit) are always available and are not listed here.
 
-export const MODULE_KEYS = ["pharmacy", "lab", "whatsapp", "reports", "analytics", "patient_portal"] as const;
+export const MODULE_KEYS = ["pharmacy", "lab", "inpatient", "whatsapp", "reports", "analytics", "patient_portal"] as const;
 export type ModuleKey = (typeof MODULE_KEYS)[number];
 
 type ModuleDef = {
@@ -24,6 +24,12 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
   lab: {
     name: "Lab",
     description: "Lab orders and results, Lab Technician role",
+    requires: [],
+    offered: true,
+  },
+  inpatient: {
+    name: "Inpatient",
+    description: "Beds, admissions, running bills with part payments, discharge summaries",
     requires: [],
     offered: true,
   },

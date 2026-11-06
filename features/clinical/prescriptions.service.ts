@@ -110,13 +110,19 @@ export async function warningsFor(tx: Tx, encounterId: string, drugId: string): 
   if (drug.itemType !== "medicine") throw new AppError(`${drug.name} is not a medicine and cannot be prescribed.`);
 
   const draft = await getDraftPrescription(tx, encounterId);
-  const items = draft?.items ?? [];
+  return { drug, warnings: await checkAgainstPatient(tx, encounter.patientId, drug, draft?.items ?? []) };
+}
+
+type CurrentItem = { drugId: string | null; drugName: string; genericName: string };
+
+/** The patient's allergies and these other medicines, checked against `drug`. */
+export async function checkAgainstPatient(tx: Tx, patientId: string, drug: typeof drugs.$inferSelect, items: CurrentItem[]): Promise<RxWarning[]> {
   const classes = await classesFor(tx, [drug.id, ...items.map((i) => i.drugId).filter((v): v is string => Boolean(v))]);
 
   const patientAllergies = await tx
     .select({ substance: allergies.substance, allergyClassId: allergies.allergyClassId, severity: allergies.severity })
     .from(allergies)
-    .where(and(eq(allergies.patientId, encounter.patientId), eq(allergies.status, "active")));
+    .where(and(eq(allergies.patientId, patientId), eq(allergies.status, "active")));
   const rules = await tx
     .select({ genericA: drugInteractions.genericA, genericB: drugInteractions.genericB, severity: drugInteractions.severity, description: drugInteractions.description })
     .from(drugInteractions)
@@ -128,12 +134,11 @@ export async function warningsFor(tx: Tx, encounterId: string, drugId: string): 
     genericName: i.genericName,
     classes: i.drugId ? (classes.get(i.drugId) ?? []) : [],
   }));
-  const warnings = checkDrug(candidate, {
+  return checkDrug(candidate, {
     allergies: patientAllergies,
     current,
     rules: rules.map((r) => ({ ...r, severity: r.severity as InteractionSeverity })),
   });
-  return { drug, warnings };
 }
 
 export type PrescriptionItemInput = {

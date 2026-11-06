@@ -75,6 +75,18 @@ Each tab holds one list your clinic controls:
 
 When new entries are added to the built-in starter list, a banner offers **Import N new entries**. It only adds; it never changes or removes your own entries. **Deactivate** hides an entry from new prescriptions and orders without affecting past records.
 
+## Lab tests and ranges
+
+Under **Medicines & catalogues > Lab tests**, open a test to see what it reports. Add or edit parameters, and set reference ranges by sex and age. Choose **Import** once if the tests have no parameters yet. The starter ranges are typical adult values: have your pathologist check them before use.
+
+## Beds and inpatient billing
+
+Under **Beds & inpatient**, add bed categories with a price per day, then beds.
+
+**Charge beds by the hour:** on, a 30-hour stay is charged 30 hours. Off, stays are charged in full 24-hour blocks, so 26 hours is charged as 48. **Minimum hours charged** applies to short stays. Changes apply to patients admitted afterwards.
+
+You also choose the discharge summary sections and can add your own. On a bill you can change bed hours or rates, give a discount or strike out a charge; each needs a reason and is recorded.
+
 ## WhatsApp messaging
 
 You need a WhatsApp Business account with the Cloud API set up in Meta Business Manager.

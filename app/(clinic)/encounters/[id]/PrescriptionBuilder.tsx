@@ -5,10 +5,13 @@
 // again when the item is saved.
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Pill, Search, ShieldAlert, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, History, Loader2, Pill, Search, ShieldAlert, X } from "lucide-react";
 import { ActionForm, Field, SubmitButton, TextArea, TextInput, inputClass } from "@/components/app/form";
 import { StatusBadge } from "@/components/app/status-badge";
-import { addPrescriptionItemAction, checkDrugAction, searchDrugsAction } from "@/features/clinical/clinical.actions";
+import { addPrescriptionItemAction, checkDrugAction, repeatPrescriptionAction, searchDrugsAction } from "@/features/clinical/clinical.actions";
+import { buttonClass } from "@/components/app/buttons";
+import type { MedicineSuggestion } from "@/features/clinical/suggestions.service";
 import type { DrugOption, PrescriptionPresets } from "@/features/clinical/prescriptions.service";
 import { SEVERITY_LABELS, type RxWarning } from "@/features/clinical/prescribing-rules";
 import { cn } from "@/lib/utils";
@@ -64,7 +67,70 @@ function Chips({ options, onPick, active }: { options: { label: string; value: s
   );
 }
 
-export function PrescriptionBuilder({ encounterId, presets }: { encounterId: string; presets: PrescriptionPresets }) {
+export type PrescriptionSuggestions = {
+  forDiagnosis: MedicineSuggestion[];
+  frequent: MedicineSuggestion[];
+  last: { id: string; date: string; doctorName: string; items: { name: string; text: string }[] } | null;
+};
+
+function SuggestionChips({ title, items, onPick }: { title: string; items: MedicineSuggestion[]; onPick: (item: MedicineSuggestion) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-zinc-500">{title}</p>
+      <ul className="flex flex-wrap gap-2">
+        {items.map((m) => (
+          <li key={m.id}>
+            <button
+              type="button"
+              onClick={() => onPick(m)}
+              title={[m.defaultDose, m.defaultFrequency, m.defaultDurationDays ? `${m.defaultDurationDays} days` : null].filter(Boolean).join(" · ")}
+              className="rounded-xl border border-zinc-200 bg-white px-3 py-1.5 text-left text-sm transition-colors hover:border-(--accent-soft-border) hover:bg-(--accent-soft) dark:border-zinc-800 dark:bg-zinc-950"
+            >
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">{m.name}</span>
+              <span className="block text-xs text-zinc-500">{[m.defaultDose, m.defaultFrequency, m.defaultDurationDays ? `${m.defaultDurationDays} days` : null].filter(Boolean).join(" · ")}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function RepeatLast({ encounterId, last }: { encounterId: string; last: NonNullable<PrescriptionSuggestions["last"]> }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  async function repeat() {
+    setPending(true);
+    const result = await repeatPrescriptionAction({ encounterId, prescriptionId: last.id });
+    setPending(false);
+    if (!result.ok) return toast.error(result.error);
+    if (result.data.added.length) toast.success(`Added ${result.data.added.join(", ")}`);
+    if (result.data.skipped.length) toast.warning(`Not added, please check: ${result.data.skipped.join(", ")}`);
+    router.refresh();
+  }
+  return (
+    <div className="rounded-2xl border border-zinc-200 p-3 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          Last prescription · {last.date} · {last.doctorName}
+        </p>
+        <button type="button" onClick={repeat} disabled={pending} className={buttonClass("secondary", "sm")}>
+          {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <History className="h-4 w-4" />} Repeat
+        </button>
+      </div>
+      <ul className="mt-2 space-y-0.5 text-sm text-zinc-700 dark:text-zinc-300">
+        {last.items.map((i) => (
+          <li key={i.name}>
+            <span className="font-medium">{i.name}</span> · {i.text}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function PrescriptionBuilder({ encounterId, presets, suggestions }: { encounterId: string; presets: PrescriptionPresets; suggestions: PrescriptionSuggestions }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DrugOption[]>([]);
   const [drug, setDrug] = useState<DrugOption | null>(null);
@@ -147,6 +213,13 @@ export function PrescriptionBuilder({ encounterId, presets }: { encounterId: str
           </ul>
         )}
         {query.trim() && results.length === 0 && <p className="px-1 text-xs text-zinc-500">No medicine in the clinic&apos;s list matches.</p>}
+        {!query.trim() && (
+          <div className="space-y-3 pt-2">
+            {suggestions.last && <RepeatLast encounterId={encounterId} last={suggestions.last} />}
+            <SuggestionChips title="You usually give for this diagnosis" items={suggestions.forDiagnosis} onPick={choose} />
+            <SuggestionChips title="Frequently prescribed" items={suggestions.frequent.filter((m) => !suggestions.forDiagnosis.some((d) => d.id === m.id))} onPick={choose} />
+          </div>
+        )}
       </div>
     );
   }
