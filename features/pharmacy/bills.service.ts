@@ -98,6 +98,8 @@ export async function enterBill(tx: Tx, clinicId: string, input: BillInput, acto
           expiryDate: line.expiryDate,
           quantity: t.units,
           unitCost: t.unitCost,
+          mrp: line.mrp,
+          packSize: line.mrp ? line.packSize : undefined,
           reason: "receipt",
           sourceType: "purchase_bill",
           sourceId: bill.id,

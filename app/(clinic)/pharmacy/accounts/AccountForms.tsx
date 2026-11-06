@@ -1,10 +1,10 @@
 "use client";
 
 // Customer records, money received from customers and money paid to suppliers.
-import { HandCoins, Pencil, UserPlus } from "lucide-react";
+import { HandCoins, History, Pencil, UserPlus } from "lucide-react";
 import { ActionForm, Field, SelectInput, SubmitButton, TextInput } from "@/components/app/form";
 import { FormDialog } from "@/components/app/dialogs";
-import { recordReceiptAction, recordSupplierPaymentAction, saveCustomerAction } from "@/features/pharmacy/accounts.actions";
+import { addOpeningAction, recordReceiptAction, recordSupplierPaymentAction, saveCustomerAction } from "@/features/pharmacy/accounts.actions";
 
 const METHODS = [
   { value: "cash", label: "Cash" },
@@ -64,6 +64,47 @@ export function CustomerDialog({ values, canSetCredit }: { values?: CustomerValu
           </div>
           <div className="flex justify-end">
             <SubmitButton>{values ? "Save" : "Add customer"}</SubmitButton>
+          </div>
+        </ActionForm>
+      )}
+    </FormDialog>
+  );
+}
+
+/** What was owed when the pharmacy moved to NuvaLyf, or a correction to it. */
+export function OpeningDialog({ side, partyId, partyName }: { side: "customer" | "supplier"; partyId: string; partyName: string }) {
+  const customer = side === "customer";
+  return (
+    <FormDialog
+      variant="secondary"
+      trigger={
+        <>
+          <History className="h-4 w-4" /> Opening balance
+        </>
+      }
+      title={`Opening balance: ${partyName}`}
+      description={customer ? "What they owed in the old software on the day you moved. Use a minus for an advance they had paid, or to correct an earlier entry." : "What you owed them in the old software on the day you moved. Use a minus for an advance you had paid, or to correct an earlier entry."}
+    >
+      {(close) => (
+        <ActionForm action={addOpeningAction} successMessage="Opening balance recorded" onSuccess={close}>
+          <input type="hidden" name="side" value={side} />
+          <input type="hidden" name="partyId" value={partyId} />
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Amount (₹)" name="amount" required>
+              <TextInput name="amount" inputMode="decimal" />
+            </Field>
+            <Field label="As of" name="asOf" required>
+              <TextInput name="asOf" type="date" />
+            </Field>
+          </div>
+          <Field label="Reference" name="reference" hint="The old bill number, if there is one">
+            <TextInput name="reference" />
+          </Field>
+          <Field label="Note" name="note">
+            <TextInput name="note" />
+          </Field>
+          <div className="flex justify-end">
+            <SubmitButton>Record</SubmitButton>
           </div>
         </ActionForm>
       )}

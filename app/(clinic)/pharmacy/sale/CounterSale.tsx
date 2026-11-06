@@ -18,7 +18,7 @@ import { counterSaleAction, searchSellableAction } from "@/features/pharmacy/pha
 import type { SellableDrug } from "@/features/pharmacy/sales.service";
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { fromMinor, toMinor } from "@/lib/money";
-import { packWord, sellingPrice, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
+import { batchPrice, packWord, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
 import { priceSale, stateOfGstin, taxModeFor } from "@/features/pharmacy/gst-rules";
 import { requiredDetails } from "@/features/pharmacy/schedule-rules";
 import { cn } from "@/lib/utils";
@@ -112,10 +112,11 @@ export function CounterSale({
 
   const priced = lines.map((l) => {
     const qty = Number(l.quantity);
-    const price = sellingPrice(l.drug, l.soldAs);
+    const chosen = l.drug.batches.find((b) => b.id === l.batchId);
+    const price = batchPrice(l.drug, chosen, l.soldAs);
     const ok = Number.isInteger(qty) && qty > 0;
     const units = ok ? unitsFor(qty, l.soldAs, l.drug.packSize) : 0;
-    const inBatch = l.drug.batches.find((b) => b.id === l.batchId)?.quantity ?? 0;
+    const inBatch = chosen?.quantity ?? 0;
     const gstRate = l.drug.gstRate !== null ? Number(l.drug.gstRate) : settings.defaultGstRate;
     return { ...l, qty, price, units, gstRate, short: units > inBatch, gross: price && ok ? toMinor(price) * qty : 0 };
   });
@@ -208,7 +209,7 @@ export function CounterSale({
                         </span>
                       </span>
                     </span>
-                    <span className="text-sm tabular-nums text-zinc-700 dark:text-zinc-300">{r.price ? money(toMinor(r.price)) : "No price"}</span>
+                    <span className="text-sm tabular-nums text-zinc-700 dark:text-zinc-300">{batchPrice(r, r.batches[0], "unit") ? money(toMinor(batchPrice(r, r.batches[0], "unit")!)) : "No price"}</span>
                   </button>
                 </li>
               ))}
@@ -251,6 +252,7 @@ export function CounterSale({
                     {line.drug.batches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.batchNo} · exp {b.expiryDate} · {b.quantity} {unitWord(line.drug.form, b.quantity)}
+                        {b.mrp ? ` · MRP ${b.mrp}` : ""}
                       </option>
                     ))}
                   </select>

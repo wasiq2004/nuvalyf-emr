@@ -8,6 +8,7 @@ import { sql } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
 import { fromMinor, toMinor } from "@/lib/money";
 import { addDaysToDateString, zonedTimeToUtc } from "@/lib/time";
+import { costValue, mrpValue } from "./stock-rules";
 
 export type PharmacyRange = { fromDate: string; toDate: string; timeZone: string; from: string; to: string };
 
@@ -107,8 +108,8 @@ export async function itemSales(tx: Tx, r: PharmacyRange) {
                coalesce(i.unit_cost, 0) * i.quantity as cost, 0::numeric as cost_back
         from app.pharmacy_sale_items i join app.pharmacy_sales s on s.id = i.sale_id where ${salesIn(r)}
         union all
-        select ri.drug_id, 0, ri.quantity, 0, ri.net, 0, ri.taxable, 0, coalesce(i.unit_cost, 0) * ri.quantity
-        from app.sale_return_items ri join app.sale_returns cn on cn.id = ri.return_id join app.pharmacy_sale_items i on i.id = ri.sale_item_id
+        select ri.drug_id, 0, ri.quantity, 0, ri.net, 0, ri.taxable, 0, coalesce(i.unit_cost, ri.unit_cost, 0) * ri.quantity
+        from app.sale_return_items ri join app.sale_returns cn on cn.id = ri.return_id left join app.pharmacy_sale_items i on i.id = ri.sale_item_id
         where ${returnsIn(r)}
       ) x join app.drugs d on d.id = x.drug_id
       group by d.id, d.name order by sum(x.net) - sum(x.net_back) desc nulls last`,
@@ -148,8 +149,8 @@ export async function gstOutput(tx: Tx, r: PharmacyRange, by: "rate" | "hsn") {
         select i.hsn, i.gst_rate::text as rate, i.quantity as units, i.net, coalesce(i.taxable, i.net) as taxable, i.cgst, i.sgst, i.igst
         from app.pharmacy_sale_items i join app.pharmacy_sales s on s.id = i.sale_id where ${salesIn(r)}
         union all
-        select i.hsn, i.gst_rate::text, -ri.quantity, -ri.net, -ri.taxable, -ri.cgst, -ri.sgst, -ri.igst
-        from app.sale_return_items ri join app.sale_returns cn on cn.id = ri.return_id join app.pharmacy_sale_items i on i.id = ri.sale_item_id
+        select coalesce(i.hsn, ri.hsn), coalesce(i.gst_rate, ri.gst_rate)::text, -ri.quantity, -ri.net, -ri.taxable, -ri.cgst, -ri.sgst, -ri.igst
+        from app.sale_return_items ri join app.sale_returns cn on cn.id = ri.return_id left join app.pharmacy_sale_items i on i.id = ri.sale_item_id
         where ${returnsIn(r)}
       ) x ${group}`,
   );
@@ -205,22 +206,22 @@ export async function gstr1(tx: Tx, month: string, timeZone: string, sellerState
         from app.pharmacy_sale_items i join app.pharmacy_sales s on s.id = i.sale_id
         where ${salesIn(r)} and s.customer_gstin is null and i.taxable is not null
         union all
-        select i.gst_rate::text, -ri.taxable, -ri.cgst, -ri.sgst, -ri.igst
+        select coalesce(i.gst_rate, ri.gst_rate)::text, -ri.taxable, -ri.cgst, -ri.sgst, -ri.igst
         from app.sale_return_items ri join app.sale_returns cn on cn.id = ri.return_id
-        join app.pharmacy_sale_items i on i.id = ri.sale_item_id join app.pharmacy_sales s on s.id = i.sale_id
-        where ${returnsIn(r)} and s.customer_gstin is null and i.taxable is not null
+        left join app.pharmacy_sale_items i on i.id = ri.sale_item_id left join app.pharmacy_sales s on s.id = i.sale_id
+        where ${returnsIn(r)} and coalesce(s.customer_gstin, cn.customer_gstin) is null and (i.id is null or i.taxable is not null)
       ) x group by 1 order by 1`,
   );
   const cdnr = await rows<{ gstin: string; note: string; date: string; invoice: string; note_value: string; rate: string; taxable: string; igst: string; cgst: string; sgst: string }>(
     tx,
     sql`
-      select s.customer_gstin as gstin, cn.number as note, to_char((cn.created_at at time zone ${timeZone})::date, 'DD-MM-YYYY') as date, s.number as invoice,
-             cn.total::text as note_value, i.gst_rate::text as rate, sum(ri.taxable)::numeric(14,2)::text as taxable,
+      select coalesce(s.customer_gstin, cn.customer_gstin) as gstin, cn.number as note, to_char((cn.created_at at time zone ${timeZone})::date, 'DD-MM-YYYY') as date, coalesce(s.number, cn.old_bill_no) as invoice,
+             cn.total::text as note_value, coalesce(i.gst_rate, ri.gst_rate)::text as rate, sum(ri.taxable)::numeric(14,2)::text as taxable,
              sum(ri.igst)::numeric(14,2)::text as igst, sum(ri.cgst)::numeric(14,2)::text as cgst, sum(ri.sgst)::numeric(14,2)::text as sgst
-      from app.sale_returns cn join app.pharmacy_sales s on s.id = cn.sale_id
-      join app.sale_return_items ri on ri.return_id = cn.id join app.pharmacy_sale_items i on i.id = ri.sale_item_id
-      where ${returnsIn(r)} and s.customer_gstin is not null and i.taxable is not null
-      group by cn.id, s.customer_gstin, s.number, i.gst_rate order by cn.number`,
+      from app.sale_returns cn left join app.pharmacy_sales s on s.id = cn.sale_id
+      join app.sale_return_items ri on ri.return_id = cn.id left join app.pharmacy_sale_items i on i.id = ri.sale_item_id
+      where ${returnsIn(r)} and coalesce(s.customer_gstin, cn.customer_gstin) is not null and (i.id is null or i.taxable is not null)
+      group by cn.id, s.customer_gstin, cn.customer_gstin, s.number, cn.old_bill_no, coalesce(i.gst_rate, ri.gst_rate) order by cn.number`,
   );
   const hsn = await gstOutput(tx, r, "hsn");
   const docs = await rows<{ kind: string; first: string | null; last: string | null; total: number; cancelled: number }>(
@@ -261,6 +262,100 @@ export async function gstr3b(tx: Tx, month: string, timeZone: string) {
       igst: "0.00",
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Stock
+// ---------------------------------------------------------------------------
+
+export type ClosingLine = {
+  name: string;
+  rack: string | null;
+  batch: string;
+  expiry: string;
+  pack: number;
+  packs: string;
+  units: number;
+  mrp: string | null;
+  costValue: string | null;
+  mrpValue: string | null;
+  state: string;
+};
+
+/**
+ * Stock at the end of a day, batch by batch, worked from the ledger, so a past
+ * date reports what was on hand then. This is the report to set beside the old
+ * software's closing stock on the day of the move.
+ */
+export async function closingStock(tx: Tx, r: PharmacyRange) {
+  const result = await rows<{ name: string; rack: string | null; item_pack: number; batch_no: string; expiry: string; unit_cost: string | null; pack_cost: string | null; pack_size: number | null; mrp: string | null; units: number }>(
+    tx,
+    sql`
+      select d.name, d.rack, d.pack_size as item_pack, b.batch_no, b.expiry_date::text as expiry, b.unit_cost::text as unit_cost, b.pack_cost::text as pack_cost,
+             b.pack_size, b.mrp::text as mrp, sum(m.change)::int as units
+      from app.stock_movements m join app.stock_batches b on b.id = m.batch_id join app.drugs d on d.id = m.drug_id
+      where m.created_at < ${r.to}::timestamptz
+      group by d.id, d.name, d.rack, d.pack_size, b.id, b.batch_no, b.expiry_date, b.unit_cost, b.pack_cost, b.pack_size, b.mrp
+      having sum(m.change) <> 0
+      order by d.name, b.expiry_date`,
+  );
+  return result.map((x): ClosingLine & { cost: number | null; atMrp: number | null; expired: boolean } => {
+    const batch = { quantity: x.units, unitCost: x.unit_cost, packCost: x.pack_cost, packSize: x.pack_size, mrp: x.mrp };
+    const cost = costValue(batch);
+    const atMrp = mrpValue(batch, x.item_pack);
+    const expired = x.expiry < r.toDate;
+    return {
+      name: x.name,
+      rack: x.rack,
+      batch: x.batch_no,
+      expiry: x.expiry,
+      pack: x.item_pack,
+      packs: x.item_pack > 1 ? `${Math.floor(x.units / x.item_pack)} + ${x.units % x.item_pack}` : String(x.units),
+      units: x.units,
+      mrp: x.mrp,
+      costValue: cost === null ? null : fromMinor(cost),
+      mrpValue: atMrp === null ? null : fromMinor(atMrp),
+      state: expired ? "Expired" : "Sellable",
+      cost,
+      atMrp,
+      expired,
+    };
+  });
+}
+
+const MOVEMENT_LABELS: Record<string, string> = {
+  opening: "Opening stock loaded",
+  receipt: "Received from suppliers",
+  sale: "Sold at the counter",
+  dispense: "Dispensed",
+  return: "Returned by customers",
+  supplier_return: "Sent back to suppliers",
+  adjustment: "Corrections (counts and reversed imports)",
+  expired: "Written off: expired",
+  damaged: "Written off: damaged",
+};
+
+/** Opening + everything in - everything out = closing, in units, for a period. */
+export async function stockMovement(tx: Tx, r: PharmacyRange) {
+  const [before] = await rows<{ units: number }>(tx, sql`select coalesce(sum(change), 0)::int as units from app.stock_movements where created_at < ${r.from}::timestamptz`);
+  const moved = await rows<{ reason: string; units_in: number; units_out: number }>(
+    tx,
+    sql`
+      select reason, coalesce(sum(change) filter (where change > 0), 0)::int as units_in, coalesce(-sum(change) filter (where change < 0), 0)::int as units_out
+      from app.stock_movements where created_at >= ${r.from}::timestamptz and created_at < ${r.to}::timestamptz
+      group by reason order by reason`,
+  );
+  const closing = before.units + moved.reduce((n, m) => n + m.units_in - m.units_out, 0);
+  return { opening: before.units, closing, lines: moved.map((m) => ({ head: MOVEMENT_LABELS[m.reason] ?? m.reason, units_in: m.units_in, units_out: m.units_out })) };
+}
+
+/** Batches whose quantity disagrees with their ledger. There should never be one. */
+export async function ledgerMismatches(tx: Tx) {
+  const [row] = await rows<{ n: number }>(
+    tx,
+    sql`select count(*)::int as n from app.stock_batches b where b.quantity <> coalesce((select sum(m.change) from app.stock_movements m where m.batch_id = b.id), 0)`,
+  );
+  return row.n;
 }
 
 // ---------------------------------------------------------------------------

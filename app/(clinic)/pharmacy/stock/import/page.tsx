@@ -4,12 +4,15 @@ import { buttonClass } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { StatusBadge } from "@/components/app/status-badge";
-import { requireClinic } from "@/lib/auth/clinic-session";
+import { can, requireClinic } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { formatDateTime } from "@/lib/format";
+import { formatMoney } from "@/lib/money";
+import { getClinicSettings } from "@/features/settings/settings.service";
 import { listStockImports } from "@/features/pharmacy/stock-import.service";
 import { STOCK_TEMPLATE_CSV } from "@/features/pharmacy/stock-import-rules";
 import { StockImportFlow } from "./StockImportFlow";
+import { ReverseImport } from "./ReverseImport";
 
 export const metadata = { title: "Import items & stock" };
 
@@ -17,7 +20,8 @@ const Col = ({ children }: { children: React.ReactNode }) => <span className="fo
 
 export default async function StockImportPage() {
   const ctx = await requireClinic({ permission: ["stock:manage", "medicine:manage"], module: "pharmacy" });
-  const jobs = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, (tx) => listStockImports(tx));
+  const { jobs, currency } = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => ({ jobs: await listStockImports(tx), currency: (await getClinicSettings(tx, ctx.clinicId)).currency }));
+  const totals = (summary: unknown) => summary as { units?: number; costValue?: string; mrpValue?: string; batches?: number };
   const template = `data:text/csv;charset=utf-8,${encodeURIComponent(STOCK_TEMPLATE_CSV)}`;
 
   return (
@@ -28,7 +32,7 @@ export default async function StockImportPage() {
       <PageHeader
         icon={FileUp}
         title="Import items & stock"
-        description="Bring your item list and opening stock in from your old software or a spreadsheet. The whole file is checked first; if any row has a problem, nothing is imported."
+        description="Bring your item list and opening stock in from your old software or a spreadsheet. The whole file is checked first; if any row has a problem, nothing is imported. Opening stock goes in once: a batch already in stock is refused."
         actions={
           <a href={template} download="nuvalyf-items-stock-template.csv" className={buttonClass("secondary", "md")}>
             <Download className="h-4 w-4" /> Template CSV
@@ -57,19 +61,23 @@ export default async function StockImportPage() {
             <Col>other_names</Col>: other spellings or brands, separated by <Col>;</Col>
           </li>
           <li>
-            <Col>batch_no</Col>, <Col>expiry_date</Col> (MM/YY, dd/mm/yyyy or yyyy-mm-dd), <Col>quantity</Col> in units: together, for opening stock
+            <Col>batch_no</Col>, <Col>expiry_date</Col> (MM/YY, dd/mm/yyyy or yyyy-mm-dd), <Col>quantity</Col>: together, for opening stock. You say below whether quantities are units or packs
           </li>
           <li>
-            <Col>unit_cost</Col>: what one unit cost you (optional)
+            <Col>pack_price</Col> or <Col>mrp</Col>: the MRP printed on one pack of this batch. Each batch keeps its own
+          </li>
+          <li>
+            <Col>unit_cost</Col>: what one unit cost you, or <Col>pack_cost</Col>: what a pack cost. With quantities in packs, <Col>unit_cost</Col> also means per pack
           </li>
         </ul>
         <p className="mt-4 text-xs text-zinc-500">
-          A row whose name, or one of its other names, is already in your list adds stock to that item instead of creating a copy. Quantities are single units (tablets, needles), not packs.
+          A row whose name, or one of its other names, is already in your list adds stock to that item instead of creating a copy. Expired stock can be included: it is recorded so it can go back to the supplier, and can never be sold. Leave out anything damaged, or write it off afterwards.
         </p>
+        <p className="mt-2 text-xs text-zinc-500">Batch numbers such as 00123 lose their zeros if Excel opens the file. Format the batch column as Text before saving. Afterwards, use Compare with stock here to check every batch against the old software&apos;s closing stock.</p>
       </Panel>
 
       <Panel title="Upload">
-        <StockImportFlow />
+        <StockImportFlow currency={currency} />
       </Panel>
 
       <Panel flush title="Recent imports">
@@ -80,14 +88,21 @@ export default async function StockImportPage() {
           columns={[
             { key: "file", header: "File", cell: (j) => <span className="font-medium text-zinc-900 dark:text-zinc-100">{j.fileName}</span> },
             { key: "when", header: "When", hideOnMobile: true, cell: (j) => formatDateTime(j.createdAt, ctx.timezone) },
-            { key: "rows", header: "Rows", align: "right", cell: (j) => j.rowCount },
+            { key: "rows", header: "Rows", align: "right", hideOnMobile: true, cell: (j) => j.rowCount },
+            { key: "units", header: "Units", align: "right", hideOnMobile: true, cell: (j) => totals(j.summary).units ?? "—" },
+            { key: "cost", header: "At cost", align: "right", hideOnMobile: true, cell: (j) => (totals(j.summary).costValue ? formatMoney(totals(j.summary).costValue, currency) : "—") },
             {
               key: "status",
               header: "",
               align: "right",
               cell: (j) =>
                 j.status === "imported" ? (
-                  <StatusBadge tone="success">{j.imported} rows imported</StatusBadge>
+                  <span className="flex items-center justify-end gap-2">
+                    <StatusBadge tone="success">{j.imported} rows imported</StatusBadge>
+                    {can(ctx, "stock:manage") && <ReverseImport jobId={j.id} fileName={j.fileName} />}
+                  </span>
+                ) : j.status === "reversed" ? (
+                  <StatusBadge tone="warning">Reversed</StatusBadge>
                 ) : (
                   <StatusBadge tone="danger">Refused · {(j.errors as unknown[]).length} problems</StatusBadge>
                 ),

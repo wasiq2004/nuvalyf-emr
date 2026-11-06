@@ -486,6 +486,43 @@ DROP TRIGGER IF EXISTS stock_movements_apply ON app.stock_movements;
 CREATE TRIGGER stock_movements_apply AFTER INSERT ON app.stock_movements
   FOR EACH ROW EXECUTE FUNCTION app.apply_stock_movement();
 
+-- A count that has moved stock (or been cancelled) is a closed record.
+CREATE OR REPLACE FUNCTION app.guard_stock_count() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'Stock counts cannot be deleted' USING ERRCODE = 'MFL01';
+  END IF;
+  IF OLD.status IN ('posted', 'cancelled') THEN
+    RAISE EXCEPTION 'A closed stock count cannot be changed' USING ERRCODE = 'MFL01';
+  END IF;
+  RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION app.guard_stock_count_line() RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+DECLARE parent_status text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'Stock count lines cannot be deleted' USING ERRCODE = 'MFL01';
+  END IF;
+  SELECT status INTO parent_status FROM app.stock_counts WHERE id = NEW.count_id;
+  IF parent_status IN ('posted', 'cancelled') THEN
+    RAISE EXCEPTION 'A closed stock count cannot be changed' USING ERRCODE = 'MFL01';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS stock_counts_guard ON app.stock_counts;
+CREATE TRIGGER stock_counts_guard BEFORE UPDATE OR DELETE ON app.stock_counts
+  FOR EACH ROW EXECUTE FUNCTION app.guard_stock_count();
+
+DROP TRIGGER IF EXISTS stock_count_lines_guard ON app.stock_count_lines;
+CREATE TRIGGER stock_count_lines_guard BEFORE INSERT OR UPDATE OR DELETE ON app.stock_count_lines
+  FOR EACH ROW EXECUTE FUNCTION app.guard_stock_count_line();
+
 DROP TRIGGER IF EXISTS stock_batches_guard ON app.stock_batches;
 CREATE TRIGGER stock_batches_guard BEFORE INSERT OR UPDATE OR DELETE ON app.stock_batches
   FOR EACH ROW EXECUTE FUNCTION app.guard_stock_batch();
@@ -495,7 +532,8 @@ DECLARE tbl text;
 BEGIN
   FOREACH tbl IN ARRAY ARRAY[
     'stock_movements', 'pharmacy_sales', 'pharmacy_sale_items', 'purchase_bills', 'purchase_bill_items',
-    'sale_returns', 'sale_return_items', 'purchase_returns', 'purchase_return_items', 'customer_receipts', 'supplier_payments'
+    'sale_returns', 'sale_return_items', 'purchase_returns', 'purchase_return_items', 'customer_receipts', 'supplier_payments',
+    'account_openings'
   ] LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON app.%I', tbl || '_append_only', tbl);
     EXECUTE format(

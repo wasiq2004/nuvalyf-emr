@@ -1,11 +1,12 @@
 import "server-only";
 
 // Named pharmacy customers and what they owe (docs/PHARMACY_DESIGN.md 4.4).
-// A balance is never stored: it is credit sales - credit notes put back on
-// the account - receipts, summed from the documents each time.
+// A balance is never stored: it is what was owed on moving to NuvaLyf + credit
+// sales - credit notes put back on the account - receipts, summed from the
+// documents each time.
 import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
-import { customerReceipts, patients, pharmacyCustomers, pharmacySales, saleReturns, users } from "@/lib/db/schema";
+import { accountOpenings, customerReceipts, patients, pharmacyCustomers, pharmacySales, saleReturns, users } from "@/lib/db/schema";
 import { AppError, isUniqueViolation } from "@/lib/errors";
 import { fromMinor, toMinor } from "@/lib/money";
 import { displayPatientName } from "@/features/patients/patient-rules";
@@ -83,8 +84,10 @@ export async function ensurePatientCustomer(tx: Tx, clinicId: string, patientId:
 
 /** What each customer owes, in paise (positive = owes the pharmacy). */
 const balanceSql = sql<string>`(
-  coalesce((select sum(s.total) from app.pharmacy_sales s where s.customer_id = ${sql.raw('"pharmacy_customers"."id"')} and s.method = 'credit'), 0)
+  coalesce((select sum(o.amount) from app.account_openings o where o.customer_id = ${sql.raw('"pharmacy_customers"."id"')}), 0)
+  + coalesce((select sum(s.total) from app.pharmacy_sales s where s.customer_id = ${sql.raw('"pharmacy_customers"."id"')} and s.method = 'credit'), 0)
   - coalesce((select sum(r.total) from app.sale_returns r join app.pharmacy_sales s2 on s2.id = r.sale_id where s2.customer_id = ${sql.raw('"pharmacy_customers"."id"')} and r.refund_method = 'account'), 0)
+  - coalesce((select sum(r.total) from app.sale_returns r where r.customer_id = ${sql.raw('"pharmacy_customers"."id"')} and r.sale_id is null and r.refund_method = 'account'), 0)
   - coalesce((select sum(c.amount) from app.customer_receipts c where c.customer_id = ${sql.raw('"pharmacy_customers"."id"')}), 0)
 )::numeric(12,2)::text`;
 
@@ -105,7 +108,7 @@ export async function customerBalances(tx: Tx, query = "") {
   return rows.map((r) => ({ ...r.customer, balance: r.balance }));
 }
 
-export type LedgerEntry = { date: Date; kind: "sale" | "return" | "receipt"; number: string; id: string; debit: string; credit: string; note: string | null };
+export type LedgerEntry = { date: Date; kind: "opening" | "sale" | "return" | "receipt"; number: string; id: string; debit: string; credit: string; note: string | null };
 
 /** Every document on the account, oldest first, with a running balance. */
 export async function customerLedger(tx: Tx, customerId: string) {
@@ -118,12 +121,22 @@ export async function customerLedger(tx: Tx, customerId: string) {
     .from(saleReturns)
     .innerJoin(pharmacySales, eq(pharmacySales.id, saleReturns.saleId))
     .where(and(eq(pharmacySales.customerId, customerId), eq(saleReturns.refundMethod, "account")));
+  const oldBillReturns = await tx
+    .select({ id: saleReturns.id, number: saleReturns.number, date: saleReturns.createdAt, total: saleReturns.total, oldBillNo: saleReturns.oldBillNo })
+    .from(saleReturns)
+    .where(and(eq(saleReturns.customerId, customerId), eq(saleReturns.refundMethod, "account")));
+  const openings = await tx.select().from(accountOpenings).where(eq(accountOpenings.customerId, customerId));
   const receipts = await tx
     .select({ id: customerReceipts.id, number: customerReceipts.number, date: customerReceipts.createdAt, amount: customerReceipts.amount, method: customerReceipts.method, reference: customerReceipts.reference, title: users.title, firstName: users.firstName, lastName: users.lastName })
     .from(customerReceipts)
     .innerJoin(users, eq(users.id, customerReceipts.receivedBy))
     .where(eq(customerReceipts.customerId, customerId));
   const entries: LedgerEntry[] = [
+    ...openings.map((o) => {
+      const owed = toMinor(o.amount) > 0;
+      return { date: o.createdAt, kind: "opening" as const, number: o.reference ?? "Opening", id: o.id, debit: owed ? o.amount : "0.00", credit: owed ? "0.00" : o.amount.replace("-", ""), note: [`Opening balance as of ${o.asOf}`, o.note].filter(Boolean).join(" · ") };
+    }),
+    ...oldBillReturns.map((r) => ({ date: r.date, kind: "return" as const, number: r.number, id: r.id, debit: "0.00", credit: r.total, note: `Items returned, old bill ${r.oldBillNo}` })),
     ...sales.map((s) => ({ date: s.date, kind: "sale" as const, number: s.number, id: s.id, debit: s.total, credit: "0.00", note: "Credit sale" })),
     ...returns.map((r) => ({ date: r.date, kind: "return" as const, number: r.number, id: r.id, debit: "0.00", credit: r.total, note: r.kind === "cancellation" ? "Sale cancelled" : "Items returned" })),
     ...receipts.map((r) => ({ date: r.date, kind: "receipt" as const, number: r.number, id: r.id, debit: "0.00", credit: r.amount, note: `${r.method.toUpperCase()}${r.reference ? ` ${r.reference}` : ""} · ${staffName(r)}` })),

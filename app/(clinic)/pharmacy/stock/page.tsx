@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Barcode, Boxes, FileUp } from "lucide-react";
+import { Barcode, ClipboardCheck, Boxes, FileUp } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { ItemTypeBadge } from "@/components/pharmacy/item-picker";
 import { packWord } from "@/features/pharmacy/selling-rules";
@@ -60,6 +60,9 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
         description="On hand per item, from the movement ledger. Open an item to add stock, write off expired or damaged units, or set its reorder level."
         actions={
           <>
+            <ButtonLink href="/pharmacy/stock/counts" variant="secondary">
+              <ClipboardCheck className="h-4 w-4" /> Stock counts
+            </ButtonLink>
             <ButtonLink href="/pharmacy/stock/labels" variant="secondary">
               <Barcode className="h-4 w-4" /> Shelf labels
             </ButtonLink>

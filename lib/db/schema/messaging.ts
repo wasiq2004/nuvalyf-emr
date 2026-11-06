@@ -132,7 +132,7 @@ export const importJobs = appSchema.table(
   {
     id: id(),
     clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
-    /** patients (register import) or stock (items and opening stock). */
+    /** patients (register), stock (items and opening stock) or balances (opening dues). */
     kind: varchar("kind", { length: 20 }).notNull().default("patients"),
     fileName: varchar("file_name", { length: 200 }).notNull(),
     rowCount: integer("row_count").notNull(),
@@ -140,11 +140,15 @@ export const importJobs = appSchema.table(
     status: varchar("status", { length: 20 }).notNull(),
     /** Every problem found, by row (the whole file is refused if any). */
     errors: jsonb("errors").notNull().default([]),
+    /** Control totals of what went in, to set against the old software's report. */
+    summary: jsonb("summary").notNull().default({}),
+    /** Why a stock import was taken back out. */
+    reversedNote: varchar("reversed_note", { length: 300 }),
     createdBy: uuid("created_by").notNull(),
     createdAt: createdAt(),
   },
   (t) => [
-    check("import_jobs_status_check", sql`${t.status} IN ('rejected', 'imported')`),
-    check("import_jobs_kind_check", sql`${t.kind} IN ('patients', 'stock')`),
+    check("import_jobs_status_check", sql`${t.status} IN ('rejected', 'imported', 'reversed')`),
+    check("import_jobs_kind_check", sql`${t.kind} IN ('patients', 'stock', 'balances')`),
   ],
 );

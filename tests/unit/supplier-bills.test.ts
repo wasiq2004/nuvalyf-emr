@@ -76,7 +76,7 @@ describe("items & stock import", () => {
     expect(valid).toHaveLength(4);
     const [first, second, needle, bp] = valid;
     expect(first).toMatchObject({ name: "Paracetamol 650", itemType: "medicine", packSize: 15, price: "2.10", packPrice: "31.50", otherNames: ["Dolo 650", "Calpol 650"] });
-    expect(first.batch).toEqual({ batchNo: "DL2401", expiryDate: "2027-12-31", quantity: 300, unitCost: "1.40" });
+    expect(first.batch).toMatchObject({ batchNo: "DL2401", expiryDate: "2027-12-31", quantity: 300, unitCost: "1.40", expired: false });
     expect(second.normalized).toBe(first.normalized);
     expect(needle).toMatchObject({ itemType: "consumable", form: "other", otherNames: ["Needle clinic", "Hypodermic needle 24G"] });
     expect(bp).toMatchObject({ itemType: "instrument", batch: null });
@@ -88,7 +88,7 @@ describe("items & stock import", () => {
       ",medicine,,,,", // 2: no name
       "Gauze,bandage,,,,", // 3: unknown type
       "Syringe 5ml,consumable,S1,,10,", // 4: batch without expiry
-      "Syringe 5ml,consumable,S2,01/2020,10,", // 5: expired
+      "Syringe 5ml,consumable,S2,01/2020,10,", // 5: expired, which is recorded rather than refused
       "Syringe 5ml,consumable,S3,12/2030,ten,", // 6: quantity not a number
       "Cotton roll,consumable,,,,12.345", // 7: price
       "Syringe 5ml,consumable,S4,12/2030,5,", // 8: fine
@@ -99,12 +99,11 @@ describe("items & stock import", () => {
       [2, "name"],
       [3, "itemType"],
       [4, "expiryDate"],
-      [5, "expiryDate"],
       [6, "quantity"],
       [7, "price"],
       [9, "batchNo"],
     ]);
-    expect(valid.map((v) => v.line)).toEqual([8]);
+    expect(valid.map((v) => v.line)).toEqual([5, 8]);
   });
 
   it("needs a name column and caps the size", () => {

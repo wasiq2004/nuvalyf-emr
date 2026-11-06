@@ -7,14 +7,15 @@ import { idField, optionalId, optionalMoney, optionalPhone, optionalText, requir
 import { PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { closePrescription, dispenseWarnings, sell, sellableStock } from "./sales.service";
 import { needsOverride } from "@/features/clinical/prescribing-rules";
-import { adjustStock, receiveStock, setReorderLevel } from "./stock.service";
+import { adjustStock, receiveStock, setBatchMrp, setReorderLevel } from "./stock.service";
 import { answerQuery, raiseQuery } from "./queries.service";
 import { cancelOrder, createOrder, decideOrder, receiveOrder, removeOrderItem, saveSupplier, setOrderItem, submitOrder } from "./purchasing.service";
 import { enterBill } from "./bills.service";
 import { SOLD_AS } from "./selling-rules";
 import { GST_RATES, MAX_BILL_LINES } from "./purchase-rules";
 import { MAX_IMPORT_BYTES } from "@/features/import/import-rules";
-import { checkStockImport, recordRejectedStockImport, runStockImport, type StockImportReport } from "./stock-import.service";
+import { checkStockImport, compareStock, recordRejectedStockImport, reverseStockImport, runStockImport, stockImportDone, type StockImportReport } from "./stock-import.service";
+import { QUANTITY_BASES } from "./stock-import-rules";
 import { searchItems } from "@/features/catalog/items.service";
 import { checkbox } from "@/lib/validation";
 
@@ -247,6 +248,25 @@ export const adjustStockAction = clinicAction(
     }),
 );
 
+export const setBatchMrpAction = clinicAction(
+  {
+    name: "pharmacy.setBatchMrp",
+    permission: "stock:manage",
+    module: "pharmacy",
+    schema: z.object({
+      batchId: idField,
+      mrp: z.string({ message: "Enter the MRP" }).trim().regex(/^\d{1,8}(\.\d{1,2})?$/, "Enter the MRP like 45 or 45.50"),
+      packSize: z.coerce.number({ message: "Units per pack must be a number" }).int("Whole units only").min(1, "At least 1").max(10000),
+    }),
+  },
+  async ({ db, audit }, input) =>
+    db(async (tx) => {
+      const row = await setBatchMrp(tx, input.batchId, input.mrp, input.packSize);
+      await audit(tx, { action: "BATCH_MRP_SET", targetType: "stock_batch", targetId: row.id, severity: "warning", details: { batch: row.batchNo, mrp: input.mrp, packSize: input.packSize } });
+      return row;
+    }),
+);
+
 export const setReorderLevelAction = clinicAction(
   {
     name: "pharmacy.reorderLevel",
@@ -451,11 +471,28 @@ const stockFile = {
   fileName: z.string().trim().min(1).max(200),
   csv: z.string().min(1, "Choose a CSV file").max(MAX_IMPORT_BYTES, "The file is larger than 2 MB. Split it."),
 };
+const quantityBasis = z.enum(QUANTITY_BASES, { message: "Say whether the quantities are single units or packs" });
 const importPermission = ["stock:manage", "medicine:manage"] as const;
 
 export const checkStockImportAction = clinicAction(
-  { name: "pharmacy.checkStockImport", permission: importPermission, module: "pharmacy", schema: z.object(stockFile) },
-  async ({ session, db }, input) => db((tx) => checkStockImport(tx, input.csv, todayInTimeZone(session.timezone))),
+  { name: "pharmacy.checkStockImport", permission: importPermission, module: "pharmacy", schema: z.object({ ...stockFile, basis: quantityBasis }) },
+  async ({ session, db }, input) => db((tx) => checkStockImport(tx, input.csv, todayInTimeZone(session.timezone), input.basis)),
+);
+
+/** The old software's closing stock against what is here. Changes nothing. */
+export const compareStockAction = clinicAction(
+  { name: "pharmacy.compareStock", permission: "stock:manage", module: "pharmacy", schema: z.object({ ...stockFile, basis: quantityBasis }) },
+  async ({ session, db }, input) => db((tx) => compareStock(tx, input.csv, todayInTimeZone(session.timezone), input.basis)),
+);
+
+export const reverseStockImportAction = clinicAction(
+  { name: "pharmacy.reverseStockImport", permission: "stock:manage", module: "pharmacy", schema: z.object({ jobId: idField, note: requiredText(300, "A reason") }) },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const row = await reverseStockImport(tx, session.clinicId, input.jobId, input.note, session.userId);
+      await audit(tx, { action: "STOCK_IMPORT_REVERSED", targetType: "import", targetId: input.jobId, severity: "warning", details: { file: row.fileName, batches: row.batches, units: row.units, reason: input.note } });
+      return row;
+    }),
 );
 
 export type StockImportOutcome =
@@ -468,12 +505,13 @@ export const runStockImportAction = clinicAction(
     name: "pharmacy.runStockImport",
     permission: importPermission,
     module: "pharmacy",
-    schema: z.object({ ...stockFile, idempotencyKey }),
+    schema: z.object({ ...stockFile, basis: quantityBasis, idempotencyKey }),
   },
   async ({ session, db, audit }, input): Promise<StockImportOutcome> => {
     const today = todayInTimeZone(session.timezone);
-    const report = await db((tx) => checkStockImport(tx, input.csv, today));
-    if (report.problems.length > 0) {
+    const { report, done } = await db(async (tx) => ({ report: await checkStockImport(tx, input.csv, today, input.basis), done: await stockImportDone(tx, input.idempotencyKey) }));
+    // A retry of a finished import finds its own batches "already in stock": that is not a refusal.
+    if (report.problems.length > 0 && !done) {
       await db(async (tx) => {
         await recordRejectedStockImport(tx, session.clinicId, input.fileName, report, session.userId);
         await audit(tx, { action: "STOCK_IMPORT_REJECTED", targetType: "import", severity: "warning", details: { file: input.fileName, rows: report.rows, problems: report.problems.length } });

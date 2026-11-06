@@ -567,8 +567,9 @@ test("Pharmacist types in supplier bills: a new consumable, another supplier's s
     mimeType: "text/csv",
     buffer: Buffer.from(`name,type,batch_no,expiry_date,quantity\nCotton roll ${suffix},consumable,CR1,12/2030,40\n${respelt},,ND3,12/2031,25\n`),
   });
+  await page.getByLabel("Single units").check();
   await page.getByRole("button", { name: "Check file" }).click();
-  await expect(page.getByText("All 2 rows are valid: 1 new item, 1 already in your list")).toBeVisible();
+  await expect(page.getByText("All 2 rows are valid")).toBeVisible();
   await page.getByRole("button", { name: "Import 2 rows" }).click();
   await expect(page.getByText("Imported: 1 new items, 2 batches, 65 units")).toBeVisible();
   await page.goto("/pharmacy/stock");
@@ -680,6 +681,89 @@ test("Pharmacist sends stock back to the supplier, plans a reorder and prints sh
   const href = await page.getByRole("link", { name: "Labels PDF" }).getAttribute("href");
   const labels = await page.request.get(href!);
   expect(labels.headers()["content-type"]).toContain("application/pdf");
+});
+
+test("A pharmacy moves over: strips load once and match, the shelf is counted blind, dues and an old bill carry across", async () => {
+  const page = pharmPage;
+  const dolo = `Dolo move ${suffix}`;
+  const rack = `M${suffix}`.slice(0, 20);
+  const file = (name: string, text: string) => ({ name, mimeType: "text/csv", buffer: Buffer.from(text) });
+  const header = "name,generic_name,form,units_per_pack,mrp,rack,batch_no,expiry_date,quantity,unit_cost";
+  const closing = [header, `${dolo},Paracetamol,tablet,15,30.00,${rack},DM1,31/12/2030,20:5,12.35`, `${dolo},Paracetamol,tablet,15,34.00,${rack},DM2,31/03/2031,10,13.10`].join("\n");
+
+  // Nothing can be checked until the file's quantities are explained.
+  await page.goto("/pharmacy/stock/import");
+  await page.getByLabel("CSV file").setInputFiles(file("closing.csv", closing));
+  await expect(page.getByRole("button", { name: "Check file" })).toBeDisabled();
+  await page.getByLabel("Packs or strips").check();
+  await page.getByRole("button", { name: "Check file" }).click();
+  await expect(page.getByText("20 strips and 5 loose of 15 = 305 tablets")).toBeVisible();
+  await page.getByRole("button", { name: "Import 2 rows" }).click();
+  await expect(page.getByText("Imported: 1 new items, 2 batches, 455 units")).toBeVisible();
+
+  // The same file again adds nothing, and comparing it finds every batch.
+  await page.getByLabel("CSV file").setInputFiles(file("closing.csv", closing));
+  await page.getByLabel("Packs or strips").check();
+  await page.getByRole("button", { name: "Check file" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "already in stock" })).toContainText("Loading it again would add to that");
+  await expect(page.getByRole("button", { name: /^Import \d+ rows$/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Compare with stock here" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "batches" })).toContainText("2 batches match");
+
+  // The closing stock report agrees with the file, batch by batch.
+  await page.goto("/pharmacy/reports?view=stock");
+  await expect(page.locator("tr", { hasText: "DM1" })).toContainText("20 + 5");
+
+  // Each batch at its own MRP.
+  await page.goto("/pharmacy/sale");
+  await page.getByRole("searchbox", { name: "Search stock" }).fill(dolo);
+  await page.getByRole("button", { name: new RegExp(dolo) }).click();
+  await page.getByLabel(`Sell ${dolo} as`).selectOption("pack");
+  await expect(page.getByText(/₹30\.00 per strip/)).toBeVisible();
+  await page.getByLabel(`Batch for ${dolo}`).selectOption({ index: 1 });
+  await expect(page.getByText(/₹34\.00 per strip/)).toBeVisible();
+
+  // A blind count: the expected figure is nowhere on the page.
+  await page.goto("/pharmacy/stock/counts");
+  await page.getByLabel("Rack").selectOption(rack);
+  await page.getByRole("button", { name: "Count this rack" }).click();
+  await expect(page.getByText("Count what is on the shelf")).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("305");
+  await page.getByLabel(`Count of ${dolo} batch DM1`).fill("300");
+  await page.getByLabel(`Count of ${dolo} batch DM2`).fill("150");
+  await page.getByRole("button", { name: "Finish counting" }).click();
+  await expect(page.getByText("Counted 300, system 305")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Post count" })).toBeDisabled();
+  await page.getByLabel(`Why ${dolo} batch DM1 differs`).selectOption("unexplained");
+  await page.getByRole("button", { name: "Post count" }).click();
+  await expect(page.getByText("Posted: 1 batches corrected")).toBeVisible();
+
+  // Dues carry over, in totals to set beside the old report.
+  const buyer = `Sunrise ${suffix}`;
+  await page.goto("/pharmacy/accounts/opening");
+  await page.getByLabel("CSV file").setInputFiles(file("dues.csv", `type,name,amount,reference\ncustomer,${buyer},12500.00,\nsupplier,Apollo ${suffix},86400.50,INV-1\n`));
+  await page.getByRole("button", { name: "Check file" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "rows are valid" })).toContainText("1 customer owing");
+  await page.getByRole("button", { name: "Import 2 rows" }).click();
+  await expect(page.getByText("Opening balances imported")).toBeVisible();
+  await page.goto("/pharmacy/accounts");
+  await expect(page.locator("tr", { hasText: buyer })).toContainText("12,500.00");
+
+  // Something sold on the old software comes back.
+  await page.goto("/pharmacy/returns/old-bill");
+  await page.getByLabel("Bill number").fill(`OLD-${suffix}`);
+  await page.getByLabel("Bill date").fill("2026-01-20");
+  await page.getByLabel("Item returned").fill(dolo);
+  await page.getByRole("button", { name: new RegExp(dolo) }).click();
+  await page.getByLabel("Batch").fill("DM1");
+  await page.getByLabel("Expiry").fill("12/30");
+  await page.getByLabel("Units returned").fill("15");
+  await page.getByLabel("Amount refunded").fill("30");
+  await page.getByLabel("Reason").fill("Course changed");
+  await page.getByRole("button", { name: "Issue credit note" }).click();
+  await expect(page.getByText(`OLD-${suffix}`.toUpperCase()).first()).toBeVisible();
+  await page.goto("/pharmacy/reports?view=stock");
+  await expect(page.locator("tr", { hasText: "DM1" })).toContainText("315");
 });
 
 test("Inpatient: beds set up, patient admitted, part payment, discharge and a signed summary with the balance shown", async () => {

@@ -15,7 +15,7 @@ import { checkDispenseDrugAction, closePrescriptionAction, dispenseAction, raise
 import { PAYMENT_METHOD_LABELS, PAYMENT_METHODS } from "@/features/billing/billing-rules";
 import { needsOverride, type RxWarning } from "@/features/clinical/prescribing-rules";
 import { fromMinor, toMinor } from "@/lib/money";
-import { packWord, sellingPrice, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
+import { batchPrice, packWord, unitWord, unitsFor, type SoldAs } from "@/features/pharmacy/selling-rules";
 import { priceSale, taxModeFor } from "@/features/pharmacy/gst-rules";
 import { quantityForDays } from "@/features/pharmacy/dispensing-rules";
 import type { SellableDrug } from "@/features/pharmacy/sales.service";
@@ -35,8 +35,12 @@ type StockOption = {
   batchNo: string;
   expiryDate: string;
   quantity: number;
+  mrp: string | null;
+  mrpPackSize: number | null;
   prescribed: boolean;
 };
+
+const printed = (option: StockOption) => ({ mrp: option.mrp, packSize: option.mrpPackSize });
 
 export type DispenseItem = {
   id: string;
@@ -114,6 +118,8 @@ function optionsFrom(drug: SellableDrug): StockOption[] {
     batchNo: b.batchNo,
     expiryDate: b.expiryDate,
     quantity: b.quantity,
+    mrp: b.mrp,
+    mrpPackSize: b.packSize,
     prescribed: false,
   }));
 }
@@ -180,7 +186,7 @@ export function DispenseForm({
         if (!option || !Number.isInteger(qty) || qty <= 0) return [];
         // Packs only for products that come in packs.
         const soldAs: SoldAs = option.packSize > 1 ? row.soldAs : "unit";
-        const price = sellingPrice(option, soldAs);
+        const price = batchPrice(option, printed(option), soldAs);
         const gstRate = option.gstRate !== null ? Number(option.gstRate) : settings.defaultGstRate;
         return [{ row, option, qty, soldAs, gstRate, units: unitsFor(qty, soldAs, option.packSize), amount: price ? toMinor(price) * qty : 0 }];
       }),
@@ -235,7 +241,7 @@ export function DispenseForm({
           const done = item?.remaining === 0 && !row.replaced;
           const line = lines.find((l) => l.row.key === row.key);
           const soldAs: SoldAs = option && option.packSize > 1 ? row.soldAs : "unit";
-          const price = option ? sellingPrice(option, soldAs) : null;
+          const price = option ? batchPrice(option, printed(option), soldAs) : null;
           const short = line && item && item.remaining !== null && line.units < item.remaining;
           const over = line && item && item.remaining !== null && line.units > item.remaining;
           return (
@@ -316,6 +322,7 @@ export function DispenseForm({
                           <option key={s.batchId} value={s.batchId}>
                             {s.drugName === row.name ? "" : `${s.drugName} · `}
                             {s.batchNo} · exp {s.expiryDate} · {s.quantity} left
+                            {s.mrp ? ` · MRP ${s.mrp}` : ""}
                           </option>
                         ))}
                       </select>

@@ -10,11 +10,11 @@ import { formatDateTime } from "@/lib/format";
 import { formatMoney, fromMinor, toMinor } from "@/lib/money";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { customerBalance, customerLedger, getCustomer } from "@/features/pharmacy/customers.service";
-import { CustomerDialog, PaymentDialog } from "../../AccountForms";
+import { CustomerDialog, OpeningDialog, PaymentDialog } from "../../AccountForms";
 
 export const metadata = { title: "Customer account" };
 
-const KIND_LINKS = { sale: "/pharmacy/sales/", return: "/pharmacy/returns/", receipt: null } as const;
+const KIND_LINKS = { opening: null, sale: "/pharmacy/sales/", return: "/pharmacy/returns/", receipt: null } as const;
 
 export default async function CustomerAccountPage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireClinic({ permission: "accounts:manage", module: "pharmacy" });
@@ -59,6 +59,7 @@ export default async function CustomerAccountPage({ params }: { params: Promise<
                 creditLimit: customer.creditLimit ?? "",
               }}
             />
+            <OpeningDialog side="customer" partyId={customer.id} partyName={customer.name} />
             {data.balance > 0 && <PaymentDialog side="customer" partyId={customer.id} partyName={customer.name} outstanding={owes} />}
           </>
         }

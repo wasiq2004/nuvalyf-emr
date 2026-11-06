@@ -125,6 +125,24 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 7.14 | Counter sale of whole strips and loose tablets in one sale: strip at its MRP, tablets at the tablet price; stock falls by the right number of tablets | ✓ | | |
 | 7.15 | A strip cannot be dispensed against a course shorter than the strip; loose tablets can | ✓ | | |
 
+## 7c. Moving from the old software
+
+| # | Check | Tested | Pass | Notes |
+|---|---|---|---|---|
+| 7.16 | A real closing stock export loads: batches, units and value equal the old software's report | | | |
+| 7.17 | A file in strips cannot be checked until quantities are declared, and the worked examples read correctly | ✓ | | |
+| 7.18 | Uploading the same file again, or a corrected copy, adds nothing | ✓ | | |
+| 7.19 | Compare with stock here lists a batch changed by one strip | ✓ | | |
+| 7.20 | A wrong load is reversed, and the corrected file goes in | ✓ | | |
+| 7.21 | Closing stock report equals the signed old report; a past date shows that day's stock | ✓ | | |
+| 7.22 | Two batches of one medicine bill at their own printed MRPs | ✓ | | |
+| 7.23 | An expired batch is recorded, cannot be sold, and goes back to the supplier on a debit note | ✓ | | |
+| 7.24 | Blind count: the expected figure is not on the screen or the sheet | ✓ | | |
+| 7.25 | A sale during a count does not show as a shortage | ✓ | | |
+| 7.26 | A difference needs a reason, then appears on the batch's ledger | ✓ | | |
+| 7.27 | Opening dues equal the old outstanding report; a supplier can be paid against them | ✓ | | |
+| 7.28 | A return on an old bill issues a credit note and appears in GSTR-1 | ✓ | | |
+
 ## 7a. Inpatient (if in plan)
 
 | # | Check | Must | ✓ | Notes |

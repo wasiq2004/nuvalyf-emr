@@ -17,7 +17,7 @@ export const metadata = { title: "Pharmacy reports" };
 
 function query(p: ReportParams, extra: Record<string, string> = {}) {
   const view = REPORT_VIEWS.find((v) => v.key === p.view)!;
-  const base: Record<string, string> = view.period === "month" ? { view: p.view, month: p.month } : { view: p.view, from: p.fromDate, to: p.toDate };
+  const base: Record<string, string> = view.period === "month" ? { view: p.view, month: p.month } : view.period === "asOn" ? { view: p.view, to: p.toDate } : { view: p.view, from: p.fromDate, to: p.toDate };
   if (p.view === "register" && p.withH) base.h = "1";
   return new URLSearchParams({ ...base, ...extra }).toString();
 }
@@ -43,7 +43,7 @@ export default async function PharmacyReportsPage({ searchParams }: { searchPara
       <PageHeader
         icon={BarChart3}
         title="Pharmacy reports"
-        description="Sales, margins, GST returns and the Schedule H1 register, all added up from bills, credit notes and supplier bills. Every export is recorded in the audit log."
+        description="Sales, margins, GST returns, the Schedule H1 register and stock, all added up from bills, credit notes, supplier bills and the stock ledger. Every export is recorded in the audit log."
       />
       <TabNav label="Report" active={p.view} tabs={REPORT_VIEWS.map((v) => ({ key: v.key, label: v.label, href: `/pharmacy/reports?${query({ ...p, view: v.key })}` }))} />
 
@@ -59,6 +59,11 @@ export default async function PharmacyReportsPage({ searchParams }: { searchPara
           <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
             Month
             <input type="month" name="month" defaultValue={p.month} max={today.slice(0, 7)} className={cn(inputClass, "mt-1.5 h-10")} />
+          </label>
+        ) : view.period === "asOn" ? (
+          <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            At the end of
+            <input type="date" name="to" defaultValue={p.toDate} max={today} className={cn(inputClass, "mt-1.5 h-10")} />
           </label>
         ) : (
           <>
@@ -80,7 +85,7 @@ export default async function PharmacyReportsPage({ searchParams }: { searchPara
         <button type="submit" className={buttonClass("secondary", "md")}>
           Show
         </button>
-        <p className="ml-auto text-xs text-zinc-500">Up to a year at a time. Dates are in {ctx.timezone}.</p>
+        <p className="ml-auto text-xs text-zinc-500">{view.period === "range" ? "Up to a year at a time. " : ""}Dates are in {ctx.timezone}.</p>
       </form>
 
       {data.sections.map((s) => {

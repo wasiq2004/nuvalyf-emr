@@ -38,8 +38,8 @@ export default async function CreditNotePage({ params }: { params: Promise<{ id:
 
   return (
     <PageShell width="wide">
-      <Link href={`/pharmacy/sales/${note.saleId}`} className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
-        <ArrowLeft className="h-4 w-4" /> Sale {note.sale.number}
+      <Link href={note.saleId ? `/pharmacy/sales/${note.saleId}` : "/pharmacy"} className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white">
+        <ArrowLeft className="h-4 w-4" /> {note.saleId ? `Sale ${note.sale.number}` : "Pharmacy"}
       </Link>
       <PageHeader
         icon={Undo2}
@@ -56,7 +56,7 @@ export default async function CreditNotePage({ params }: { params: Promise<{ id:
         }
       />
 
-      <Panel flush title="Taken back" description="These units went back into the same batches they were sold from.">
+      <Panel flush title="Taken back" description={note.saleId ? "These units went back into the same batches they were sold from." : "On a bill from the old software. Units fit to resell are back in stock; the rest were written off."}>
         <DataTable
           rows={note.items}
           rowKey={(i) => i.id}
@@ -114,13 +114,15 @@ export default async function CreditNotePage({ params }: { params: Promise<{ id:
               { label: "Reason", value: note.reason },
               {
                 label: note.kind === "cancellation" ? "Cancels" : "Against",
-                value: (
+                value: note.saleId ? (
                   <Link href={`/pharmacy/sales/${note.saleId}`} className="font-mono font-semibold text-(--accent-text) hover:underline">
                     {note.sale.number}
                   </Link>
+                ) : (
+                  <span className="font-mono font-semibold">{note.oldBillNo}</span>
                 ),
               },
-              { label: "Sale date", value: formatDateTime(note.sale.soldAt, ctx.timezone) },
+              { label: "Sale date", value: note.oldBillDate ? formatDate(note.oldBillDate, "UTC") : formatDateTime(note.sale.soldAt, ctx.timezone) },
               ...(note.sale.customerGstin ? [{ label: "Buyer GSTIN", value: <span className="font-mono">{note.sale.customerGstin}</span> }] : []),
             ]}
           />

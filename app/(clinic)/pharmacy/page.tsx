@@ -67,11 +67,18 @@ export default async function PharmacyPage({ searchParams }: { searchParams: Pro
         title="Pharmacy"
         description="Signed prescriptions waiting to be filled, counter sales and stock that needs attention."
         actions={
-          canSell ? (
-            <ButtonLink href="/pharmacy/sale">
-              <ShoppingCart className="h-4 w-4" /> New sale
-            </ButtonLink>
-          ) : undefined
+          <>
+            {can(ctx, "pharmacy:return") && (
+              <ButtonLink href="/pharmacy/returns/old-bill" variant="secondary">
+                Return on an old bill
+              </ButtonLink>
+            )}
+            {canSell && (
+              <ButtonLink href="/pharmacy/sale">
+                <ShoppingCart className="h-4 w-4" /> New sale
+              </ButtonLink>
+            )}
+          </>
         }
       />
 

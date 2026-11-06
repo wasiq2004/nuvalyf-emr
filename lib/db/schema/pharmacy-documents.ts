@@ -4,7 +4,7 @@
 //
 // Every document is append-only (db/sql/security.sql). A mistake is undone
 // by another document that points at the first, never by editing it.
-import { boolean, check, foreignKey, index, integer, numeric, unique, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, check, date, foreignKey, index, integer, numeric, unique, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
 import { clinics } from "./platform";
@@ -56,7 +56,15 @@ export const saleReturns = appSchema.table(
     /** CN/2627/000001 */
     number: varchar("number", { length: 30 }).notNull(),
     fiscalYear: varchar("fiscal_year", { length: 7 }).notNull(),
-    saleId: uuid("sale_id").notNull(),
+    /** The NuvaLyf sale; empty when the bill was issued by the old software. */
+    saleId: uuid("sale_id"),
+    /** The old software's bill this note is against. */
+    oldBillNo: varchar("old_bill_no", { length: 60 }),
+    oldBillDate: date("old_bill_date"),
+    /** The buyer of an old bill (a sale carries its own). */
+    customerId: uuid("customer_id"),
+    customerName: varchar("customer_name", { length: 200 }),
+    customerGstin: varchar("customer_gstin", { length: 15 }),
     kind: varchar("kind", { length: 15 }).notNull(),
     reason: varchar("reason", { length: 300 }).notNull(),
     /** How the money went back: the sale's method, or the customer's account. */
@@ -72,7 +80,10 @@ export const saleReturns = appSchema.table(
     unique("sale_returns_clinic_id_id_key").on(t.clinicId, t.id),
     uniqueIndex("sale_returns_number_idx").on(t.clinicId, t.number),
     foreignKey({ name: "sale_returns_sale_fk", columns: [t.clinicId, t.saleId], foreignColumns: [pharmacySales.clinicId, pharmacySales.id] }),
+    foreignKey({ name: "sale_returns_customer_fk", columns: [t.clinicId, t.customerId], foreignColumns: [pharmacyCustomers.clinicId, pharmacyCustomers.id] }),
     index("sale_returns_sale_idx").on(t.saleId),
+    index("sale_returns_old_bill_idx").on(t.clinicId, t.oldBillNo),
+    check("sale_returns_source_check", sql`(${t.saleId} IS NULL) <> (${t.oldBillNo} IS NULL)`),
     index("sale_returns_created_idx").on(t.clinicId, t.createdAt),
     check("sale_returns_kind_check", sql`${t.kind} IN ('return', 'cancellation')`),
     check("sale_returns_method_check", sql`${t.refundMethod} IN ('cash', 'upi', 'card', 'other', 'account', 'inpatient')`),
@@ -86,7 +97,8 @@ export const saleReturnItems = appSchema.table(
     id: id(),
     clinicId: clinicId(),
     returnId: uuid("return_id").notNull(),
-    saleItemId: uuid("sale_item_id").notNull(),
+    /** Empty on an old bill: the columns below keep what the sale line would. */
+    saleItemId: uuid("sale_item_id"),
     drugId: uuid("drug_id").notNull(),
     batchId: uuid("batch_id").notNull(),
     /** Units back into the batch. */
@@ -97,6 +109,10 @@ export const saleReturnItems = appSchema.table(
     cgst: money("cgst").notNull().default("0"),
     sgst: money("sgst").notNull().default("0"),
     igst: money("igst").notNull().default("0"),
+    description: varchar("description", { length: 300 }),
+    hsn: varchar("hsn", { length: 8 }),
+    gstRate: numeric("gst_rate", { precision: 5, scale: 2 }),
+    unitCost: money("unit_cost"),
   },
   (t) => [
     foreignKey({ name: "sale_return_items_return_fk", columns: [t.clinicId, t.returnId], foreignColumns: [saleReturns.clinicId, saleReturns.id] }),
@@ -104,7 +120,38 @@ export const saleReturnItems = appSchema.table(
     index("sale_return_items_return_idx").on(t.returnId),
     index("sale_return_items_sale_item_idx").on(t.saleItemId),
     check("sale_return_items_quantity_check", sql`${t.quantity} > 0`),
+    check("sale_return_items_source_check", sql`${t.saleItemId} IS NOT NULL OR ${t.gstRate} IS NOT NULL`),
     check("sale_return_items_tax_check", sql`${t.net} = ${t.taxable} + ${t.cgst} + ${t.sgst} + ${t.igst}`),
+  ],
+);
+
+/**
+ * What a customer owed, or the pharmacy owed a supplier, when it moved to
+ * NuvaLyf. Balances are still added up from documents: this is that first
+ * document. Append-only; a correction is another row with a reason.
+ */
+export const accountOpenings = appSchema.table(
+  "account_openings",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    customerId: uuid("customer_id"),
+    supplierId: uuid("supplier_id"),
+    /** Positive: they owe (customer) or are owed (supplier). Negative: a correction. */
+    amount: money("amount").notNull(),
+    asOf: date("as_of").notNull(),
+    reference: varchar("reference", { length: 100 }),
+    note: varchar("note", { length: 300 }),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({ name: "account_openings_customer_fk", columns: [t.clinicId, t.customerId], foreignColumns: [pharmacyCustomers.clinicId, pharmacyCustomers.id] }),
+    foreignKey({ name: "account_openings_supplier_fk", columns: [t.clinicId, t.supplierId], foreignColumns: [suppliers.clinicId, suppliers.id] }),
+    index("account_openings_customer_idx").on(t.customerId),
+    index("account_openings_supplier_idx").on(t.supplierId),
+    check("account_openings_party_check", sql`(${t.customerId} IS NULL) <> (${t.supplierId} IS NULL)`),
+    check("account_openings_amount_check", sql`${t.amount} <> 0`),
   ],
 );
 

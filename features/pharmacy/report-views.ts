@@ -6,7 +6,7 @@ import "server-only";
 import type { Tx } from "@/lib/db";
 import { fromMinor, toMinor } from "@/lib/money";
 import { addDaysToDateString } from "@/lib/time";
-import { collectedByMethod, gstInput, gstOutput, gstr1, gstr3b, itemSales, pharmacyRange, salesByDay, salesByUser, scheduleRegister } from "./pharmacy-reports.service";
+import { closingStock, collectedByMethod, gstInput, gstOutput, gstr1, gstr3b, itemSales, ledgerMismatches, pharmacyRange, salesByDay, salesByUser, scheduleRegister, stockMovement } from "./pharmacy-reports.service";
 import type { PharmacySettings } from "./settings.service";
 
 export const REPORT_VIEWS = [
@@ -16,6 +16,8 @@ export const REPORT_VIEWS = [
   { key: "gstr1", label: "GSTR-1", period: "month" },
   { key: "gstr3b", label: "GSTR-3B", period: "month" },
   { key: "register", label: "Schedule register", period: "range" },
+  { key: "stock", label: "Closing stock", period: "asOn" },
+  { key: "movement", label: "Stock movement", period: "range" },
 ] as const;
 export type ReportView = (typeof REPORT_VIEWS)[number]["key"];
 
@@ -144,6 +146,50 @@ export async function buildReport(tx: Tx, p: ReportParams, timeZone: string, set
             { head: "Tax less ITC (before set-off rules)", taxable: null, igst: payable("igst"), cgst: payable("cgst"), sgst: payable("sgst") },
           ],
           { total: false, description: "Worked from this pharmacy's own documents. Check against the GST portal (GSTR-2B) before filing." },
+        ),
+      ];
+    }
+    case "stock": {
+      const lines = await closingStock(tx, r);
+      const group = (label: string, list: typeof lines) => ({
+        state: label,
+        batches: list.length,
+        units: list.reduce((s, l) => s + l.units, 0),
+        cost: fromMinor(list.reduce((s, l) => s + (l.cost ?? 0), 0)),
+        at_mrp: fromMinor(list.reduce((s, l) => s + (l.atMrp ?? 0), 0)),
+        no_cost: list.filter((l) => l.cost === null).length,
+        no_mrp: list.filter((l) => l.atMrp === null).length,
+      });
+      return [
+        section(
+          "stock-totals",
+          `Stock at the end of ${p.toDate}`,
+          [t("state", ""), n("batches", "Batches"), n("units", "Units"), m("cost", "At cost"), m("at_mrp", "At MRP"), n("no_cost", "No cost"), n("no_mrp", "No MRP")],
+          [group("Sellable", lines.filter((l) => !l.expired)), group("Expired", lines.filter((l) => l.expired))],
+          { description: "Set these totals beside the old software's closing stock. Batches with no cost or no MRP are left out of that value, and counted in the last two columns." },
+        ),
+        section(
+          "stock-batches",
+          "Batch by batch",
+          [t("name", "Item"), t("rack", "Rack"), t("batch", "Batch"), t("expiry", "Expiry"), t("state", "State"), n("pack", "Pack"), t("packs", "Packs + loose"), n("units", "Units"), m("mrp", "MRP"), m("costValue", "At cost"), m("mrpValue", "At MRP")],
+          lines.map((l) => ({ name: l.name, rack: l.rack, batch: l.batch, expiry: l.expiry, state: l.state, pack: l.pack, packs: l.packs, units: l.units, mrp: l.mrp, costValue: l.costValue, mrpValue: l.mrpValue })),
+          { description: "From the ledger, so a past date shows what was on hand that day." },
+        ),
+      ];
+    }
+    case "movement": {
+      const moved = await stockMovement(tx, r);
+      const mismatches = await ledgerMismatches(tx);
+      return [
+        section(
+          "movement",
+          "Stock movement",
+          [t("head", ""), n("units_in", "In"), n("units_out", "Out")],
+          [{ head: `At the start of ${p.fromDate}`, units_in: moved.opening, units_out: null }, ...moved.lines, { head: `At the end of ${p.toDate}`, units_in: moved.closing, units_out: null }],
+          {
+            total: false,
+            description: mismatches === 0 ? "In single units. The start, plus everything in, less everything out, comes to the end. Every batch agrees with its ledger." : `${mismatches} batch(es) disagree with their ledger. This should never happen: contact support.`,
+          },
         ),
       ];
     }

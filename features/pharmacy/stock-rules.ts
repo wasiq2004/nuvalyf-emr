@@ -1,4 +1,5 @@
 // Pure stock rules (unit tested).
+import { toMinor } from "@/lib/money";
 import { addDaysToDateString } from "@/lib/time";
 
 export const EXPIRY_WARNING_DAYS = 90;
@@ -12,6 +13,25 @@ export function isExpired(expiryDate: string, today: string) {
 
 export function expiresWithin(expiryDate: string, today: string, days: number) {
   return !isExpired(expiryDate, today) && expiryDate <= addDaysToDateString(today, days);
+}
+
+export type ValuedBatch = { quantity: number; unitCost: string | null; packCost: string | null; packSize: number | null; mrp: string | null };
+
+/**
+ * A batch at cost, in paise, or null when no cost is known. A pack cost is
+ * used when there is one: Rs 12.35 for 15 tablets cannot be held exactly per
+ * tablet, and stock value has to match the old software to the rupee.
+ */
+export function costValue(batch: ValuedBatch): number | null {
+  if (batch.packCost && batch.packSize) return Math.round((toMinor(batch.packCost) * batch.quantity) / batch.packSize);
+  if (batch.unitCost) return toMinor(batch.unitCost) * batch.quantity;
+  return null;
+}
+
+/** A batch at its printed MRP, in paise, or null when no MRP is known. */
+export function mrpValue(batch: ValuedBatch, itemPackSize: number): number | null {
+  if (!batch.mrp) return null;
+  return Math.round((toMinor(batch.mrp) * batch.quantity) / (batch.packSize ?? itemPackSize));
 }
 
 /** First expiry, first out: the earliest-expiring usable batch with enough stock. */

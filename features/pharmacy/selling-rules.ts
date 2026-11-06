@@ -17,6 +17,30 @@ export function sellingPrice(item: Sellable, soldAs: SoldAs): string | null {
   return item.price ? fromMinor(toMinor(item.price) * item.packSize) : null;
 }
 
+/** What is printed on a batch: its MRP for a pack of `packSize` units. */
+export type PrintedPrice = { mrp: string | null; packSize: number | null };
+
+/** The most one unit or pack of this batch may sell for, or null when no MRP is recorded. */
+export function batchCeiling(batch: PrintedPrice, soldAs: SoldAs, itemPackSize: number): string | null {
+  if (!batch.mrp) return null;
+  const printedPack = batch.packSize ?? itemPackSize;
+  const units = soldAs === "pack" ? itemPackSize : 1;
+  // Rounded down: a loose tablet can only ever come to less than the strip's MRP.
+  return fromMinor(Math.floor((toMinor(batch.mrp) * units) / printedPack));
+}
+
+/**
+ * The price at the counter. The clinic's own price stands, but a batch never
+ * sells above what is printed on it, however the item's price has moved since.
+ */
+export function batchPrice(item: Sellable, batch: PrintedPrice | null | undefined, soldAs: SoldAs): string | null {
+  const own = sellingPrice(item, soldAs);
+  const ceiling = batch ? batchCeiling(batch, soldAs, item.packSize) : null;
+  if (!ceiling) return own;
+  if (!own) return ceiling;
+  return toMinor(own) > toMinor(ceiling) ? ceiling : own;
+}
+
 /** Units that leave stock for a line. */
 export function unitsFor(quantity: number, soldAs: SoldAs, packSize: number): number {
   return soldAs === "pack" ? quantity * packSize : quantity;

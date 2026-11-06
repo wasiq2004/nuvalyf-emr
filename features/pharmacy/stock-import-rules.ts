@@ -13,6 +13,55 @@ export { parseCsv, normalizeExpiry };
 
 export const MAX_STOCK_IMPORT_ROWS = 3000;
 
+/** What the quantity column counts. Asked of the person: a file cannot say. */
+export const QUANTITY_BASES = ["units", "packs"] as const;
+export type QuantityBasis = (typeof QUANTITY_BASES)[number];
+
+export type DateOrder = "dmy" | "mdy" | "ambiguous" | "mixed";
+const FULL_DATE = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/;
+
+/**
+ * Who wrote the file: 31/12/2027 settles day-first, 12/31/2027 month-first.
+ * Excel in a US locale writes 12/1/2027 for 1 December; read day-first that is
+ * 12 January, a wrong expiry with nothing to show for it. A file with nothing
+ * to settle it stays "ambiguous", and only its dates that could go either way
+ * are refused.
+ */
+export function dateOrderOf(values: string[]): DateOrder {
+  let dayFirst = false;
+  let monthFirst = false;
+  let unsure = false;
+  for (const value of values) {
+    const match = FULL_DATE.exec(value.trim());
+    if (!match) continue;
+    const [a, b] = [Number(match[1]), Number(match[2])];
+    if (a > 12) dayFirst = true;
+    else if (b > 12) monthFirst = true;
+    else if (a !== b) unsure = true;
+  }
+  if (dayFirst && monthFirst) return "mixed";
+  if (dayFirst) return "dmy";
+  if (monthFirst) return "mdy";
+  return unsure ? "ambiguous" : "dmy";
+}
+
+export function parseExpiry(value: string, order: DateOrder): string {
+  const match = FULL_DATE.exec(value.trim());
+  if (match && order === "mdy") return normalizeExpiry(`${match[2]}/${match[1]}/${match[3]}`);
+  return normalizeExpiry(value);
+}
+
+const couldBeEither = (value: string) => {
+  const match = FULL_DATE.exec(value.trim());
+  return Boolean(match) && Number(match![1]) <= 12 && Number(match![2]) <= 12 && match![1] !== match![2];
+};
+
+/** "4", or strips and loose as old software writes them: "2:5" or "2+5". */
+export function parsePackQuantity(value: string): { packs: number; loose: number } | null {
+  const match = /^(\d{1,7})(?:\s*[:+]\s*(\d{1,5}))?$/.exec(value.trim());
+  return match ? { packs: Number(match[1]), loose: Number(match[2] ?? 0) } : null;
+}
+
 const COLUMNS: Record<string, string[]> = {
   name: ["name", "item", "item name", "medicine", "product", "product name"],
   itemType: ["type", "item type"],
@@ -24,6 +73,7 @@ const COLUMNS: Record<string, string[]> = {
   packSize: ["units per pack", "pack size", "pack"],
   price: ["selling price", "price", "price per unit", "mrp per unit"],
   packPrice: ["pack price", "price per pack", "strip price", "mrp per pack", "mrp"],
+  packCost: ["pack cost", "cost per pack", "rate per pack", "purchase rate per pack", "ptr"],
   reorderLevel: ["reorder level", "reorder", "min stock", "minimum stock"],
   otherNames: ["other names", "aliases", "also known as"],
   hsn: ["hsn", "hsn code", "hsn sac"],
@@ -60,6 +110,7 @@ export type StockImportRow = {
   manufacturer: string | null;
   category: string | null;
   packSize: number;
+  packSizeGiven: boolean;
   price: string | null;
   packPrice: string | null;
   hsn: string | null;
@@ -69,14 +120,24 @@ export type StockImportRow = {
   barcode: string | null;
   reorderLevel: number;
   otherNames: string[];
-  batch: { batchNo: string; expiryDate: string; quantity: number; unitCost: string | null } | null;
+  batch: {
+    batchNo: string;
+    expiryDate: string;
+    /** As written: units, or packs and loose units when the file counts packs. */
+    quantity: number;
+    packs: number;
+    loose: number;
+    unitCost: string | null;
+    packCost: string | null;
+    expired: boolean;
+  } | null;
 };
 export type StockImportProblem = { line: number; field: string; message: string };
 
 const MONEY = /^\d{1,8}(\.\d{1,2})?$/;
 const TYPE_ALIASES: Record<string, ItemType> = { "": "medicine", drug: "medicine", medicine: "medicine", consumable: "consumable", supply: "consumable", instrument: "instrument", equipment: "instrument" };
 
-export function validateStockRows(rows: string[][], today: string): { valid: StockImportRow[]; problems: StockImportProblem[] } {
+export function validateStockRows(rows: string[][], today: string, basis: QuantityBasis = "units"): { valid: StockImportRow[]; problems: StockImportProblem[] } {
   const problems: StockImportProblem[] = [];
   if (rows.length < 2) return { valid: [], problems: [{ line: 1, field: "file", message: "The file has no item rows." }] };
   const { map, missing } = mapStockHeaders(rows[0]);
@@ -86,6 +147,10 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
   }
 
   const cell = (row: string[], key: string) => (map[key] === undefined ? "" : (row[map[key]] ?? "").trim());
+  const order = dateOrderOf(rows.slice(1).map((row) => cell(row, "expiryDate")));
+  if (order === "mixed") {
+    return { valid: [], problems: [{ line: 1, field: "expiryDate", message: "Some dates in this file are day-first and others month-first, so none of them can be trusted. Use MM/YYYY or yyyy-mm-dd throughout." }] };
+  }
   const valid: StockImportRow[] = [];
   const batches = new Map<string, number>();
 
@@ -108,6 +173,7 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
 
     const packRaw = cell(row, "packSize");
     const packSize = packRaw ? Number(packRaw) : 1;
+    const packSizeGiven = packRaw !== "";
     if (!Number.isInteger(packSize) || packSize < 1 || packSize > 10000) problem("packSize", "Units per pack must be a whole number from 1");
 
     const price = cell(row, "price");
@@ -139,23 +205,43 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
     const expiryRaw = cell(row, "expiryDate");
     const qtyRaw = cell(row, "quantity");
     const unitCost = cell(row, "unitCost");
+    const packCost = cell(row, "packCost");
+    const packQuantity = basis === "packs" ? parsePackQuantity(qtyRaw) : null;
+    const nothingInStock = qtyRaw !== "" && (basis === "packs" ? packQuantity?.packs === 0 && packQuantity.loose === 0 : Number(qtyRaw) === 0);
     let batch: StockImportRow["batch"] = null;
-    if (batchNo || expiryRaw || qtyRaw) {
-      const expiryDate = normalizeExpiry(expiryRaw);
+    // Old software lists sold-out batches with a zero: that is an item, not stock.
+    if (!nothingInStock && (batchNo || expiryRaw || qtyRaw)) {
+      const expiryDate = parseExpiry(expiryRaw, order);
       const quantity = Number(qtyRaw);
       if (!batchNo) problem("batchNo", "Batch is required when there is stock");
+      else if (/^\d+(\.\d+)?e\+?\d+$/i.test(batchNo)) problem("batchNo", `"${cell(row, "batchNo")}" is how Excel shortens a long number, so the real batch is lost. Format the column as Text and export it again`);
       if (batchNo.length > 60) problem("batchNo", "Batch is longer than 60 characters");
       if (!expiryRaw) problem("expiryDate", "Expiry is required when there is stock");
+      else if (/^\d{5}$/.test(expiryRaw)) problem("expiryDate", `"${expiryRaw}" is how Excel stores a date. Format the column as a date and export it again`);
+      else if (order === "ambiguous" && couldBeEither(expiryRaw)) problem("expiryDate", `"${expiryRaw}" could be read two ways, and nothing else in this file settles it. Write it as MM/YYYY or yyyy-mm-dd`);
       else if (!isValidDateString(expiryDate)) problem("expiryDate", `"${expiryRaw}" is not a date (yyyy-mm-dd, dd/mm/yyyy or mm/yyyy)`);
-      else if (expiryDate < today) problem("expiryDate", "Already expired: leave it out or write it off");
       if (!qtyRaw) problem("quantity", "Quantity is required when there is a batch");
-      else if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1_000_000) problem("quantity", "Quantity must be a whole number of units from 1");
+      else if (qtyRaw.startsWith("-")) problem("quantity", `The old software shows ${qtyRaw} here. Stock cannot be negative: count what is really on the shelf and enter that`);
+      else if (basis === "packs") {
+        if (!packQuantity) problem("quantity", `"${qtyRaw}" is not a number of packs, like 4, or packs and loose units, like 4:5`);
+      } else if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1_000_000) problem("quantity", "Quantity must be a whole number of units from 1");
       if (unitCost && !MONEY.test(unitCost)) problem("unitCost", `"${unitCost}" is not an amount like 1.25`);
+      if (packCost && !MONEY.test(packCost)) problem("packCost", `"${packCost}" is not an amount like 45.50`);
       const key = `${normalized}|${batchNo}|${expiryDate}`;
       const earlier = batches.get(key);
       if (earlier) problem("batchNo", `Same item, batch and expiry as line ${earlier}`);
       else batches.set(key, line);
-      batch = { batchNo, expiryDate, quantity, unitCost: unitCost || null };
+      batch = {
+        batchNo,
+        expiryDate,
+        quantity: basis === "packs" ? 0 : quantity,
+        packs: packQuantity?.packs ?? 0,
+        loose: packQuantity?.loose ?? 0,
+        unitCost: basis === "packs" ? null : unitCost || null,
+        // With quantities in packs, a cost is a cost per pack too.
+        packCost: packCost || (basis === "packs" ? unitCost || null : null),
+        expired: expiryDate < today,
+      };
     }
 
     if (problems.length > before) return;
@@ -170,6 +256,7 @@ export function validateStockRows(rows: string[][], today: string): { valid: Sto
       manufacturer: cell(row, "manufacturer").slice(0, 120) || null,
       category: cell(row, "category").slice(0, 80) || null,
       packSize,
+      packSizeGiven,
       price: price || null,
       packPrice: packPrice || null,
       hsn: hsn || null,

@@ -3,7 +3,7 @@
 import { PackagePlus } from "lucide-react";
 import { ActionForm, Field, SelectInput, SubmitButton, TextInput } from "@/components/app/form";
 import { FormDialog } from "@/components/app/dialogs";
-import { adjustStockAction, receiveStockAction, setReorderLevelAction } from "@/features/pharmacy/pharmacy.actions";
+import { adjustStockAction, receiveStockAction, setBatchMrpAction, setReorderLevelAction } from "@/features/pharmacy/pharmacy.actions";
 
 export function ReceiveStockDialog({ drugId, drugName }: { drugId: string; drugName: string }) {
   return (
@@ -14,7 +14,7 @@ export function ReceiveStockDialog({ drugId, drugName }: { drugId: string; drugN
         </>
       }
       title={`Add stock: ${drugName}`}
-      description="For opening stock, a delivery without a purchase order, or a customer return. Deliveries against an order are received on the order."
+      description="For opening stock, a delivery without a purchase order, or a customer return. Deliveries against an order are received on the order. Only opening stock may already be expired."
     >
       {(close) => (
         <ActionForm action={receiveStockAction} successMessage="Stock added" onSuccess={close}>
@@ -87,6 +87,30 @@ export function AdjustBatchDialog({ batchId, batchNo, quantity }: { batchId: str
           <Field label="Note" name="note" required>
             <TextInput name="note" placeholder="e.g. Physical count, 14 Oct" />
           </Field>
+          <div className="flex justify-end">
+            <SubmitButton>Save</SubmitButton>
+          </div>
+        </ActionForm>
+      )}
+    </FormDialog>
+  );
+}
+
+/** The MRP printed on this batch: it stops the batch selling for more. */
+export function BatchMrpDialog({ batchId, batchNo, mrp, packSize }: { batchId: string; batchNo: string; mrp: string | null; packSize: number }) {
+  return (
+    <FormDialog variant="ghost" size="sm" trigger="MRP" title={`MRP of batch ${batchNo}`} description="As printed on the pack. This batch never sells above it, whatever the item's price is.">
+      {(close) => (
+        <ActionForm action={setBatchMrpAction} successMessage="MRP saved" onSuccess={close}>
+          <input type="hidden" name="batchId" value={batchId} />
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="MRP of one pack (₹)" name="mrp" required>
+              <TextInput name="mrp" inputMode="decimal" defaultValue={mrp ?? ""} />
+            </Field>
+            <Field label="Units in that pack" name="packSize" required>
+              <TextInput name="packSize" type="number" min={1} defaultValue={packSize} />
+            </Field>
+          </div>
           <div className="flex justify-end">
             <SubmitButton>Save</SubmitButton>
           </div>

@@ -12,11 +12,11 @@ import { formatDateTime } from "@/lib/format";
 import { formatMoney, fromMinor, toMinor } from "@/lib/money";
 import { getClinicSettings } from "@/features/settings/settings.service";
 import { supplierBalance, supplierLedger } from "@/features/pharmacy/supplier-accounts.service";
-import { PaymentDialog } from "../../AccountForms";
+import { OpeningDialog, PaymentDialog } from "../../AccountForms";
 
 export const metadata = { title: "Supplier account" };
 
-const KIND_LINKS = { bill: "/pharmacy/purchases/bills/", debit_note: "/pharmacy/purchases/returns/", payment: null } as const;
+const KIND_LINKS = { opening: null, bill: "/pharmacy/purchases/bills/", debit_note: "/pharmacy/purchases/returns/", payment: null } as const;
 
 export default async function SupplierAccountPage({ params }: { params: Promise<{ id: string }> }) {
   const ctx = await requireClinic({ permission: "accounts:manage", module: "pharmacy" });
@@ -47,7 +47,12 @@ export default async function SupplierAccountPage({ params }: { params: Promise<
         eyebrow="Supplier account"
         title={supplier.name}
         description={data.owed > 0 ? `Owed ${money(owed)}` : "Nothing owed"}
-        actions={data.owed > 0 ? <PaymentDialog side="supplier" partyId={supplier.id} partyName={supplier.name} outstanding={owed} /> : undefined}
+        actions={
+          <>
+            <OpeningDialog side="supplier" partyId={supplier.id} partyName={supplier.name} />
+            {data.owed > 0 && <PaymentDialog side="supplier" partyId={supplier.id} partyName={supplier.name} outstanding={owed} />}
+          </>
+        }
       />
       <Panel title="Details">
         <DetailList

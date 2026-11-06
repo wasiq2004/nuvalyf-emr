@@ -288,6 +288,17 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 - [x] Supporting documents (PDF, JPG, PNG): type checked from the content, shown in the patient record and consultation, printed after the report, late ones return to Unread, removal needs a reason
 - [x] Migration 0024; see [LAB_REPORTS.md](LAB_REPORTS.md)
 
+## Client request: moving pharmacy stock from old software ✅
+
+- [x] Opening stock loads once: a batch already in stock is refused; a wrong load can be reversed until something is sold
+- [x] Quantities declared as units or packs before a file is checked (`20:5`), with worked examples; pack cost kept so value matches to the rupee
+- [x] Dates read from the file's own evidence, ambiguous ones refused; Excel damage and negative stock refused with the reason
+- [x] Control totals on the check, compare against the old closing stock line by line, Closing stock and Stock movement reports
+- [x] Each batch keeps its printed MRP, a ceiling on the clinic's price; expired stock recorded and unsellable
+- [x] Stock counts: blind, on screen or printed, daily/rack/whole pharmacy, recount, reasons, posted through the ledger, no need to close
+- [x] Opening balances for customers and suppliers; credit notes against the old software's bills
+- [x] Migration 0025; see [STOCK_MIGRATION.md](STOCK_MIGRATION.md)
+
 ---
 
 ## Decisions log
@@ -297,6 +308,8 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 | 2026-11-06 | Pharmacist may change dose, days, quantity and medicines with no doctor approval; removes the course limit |
 | 2026-11-06 | Bed billing: by the hour, or full 24-hour blocks when the toggle is off; minimum 24 hours, part hours round up (minimum and rounding to be confirmed with the client) |
 | 2026-11-06 | Discharge summary is issued with the balance shown, never held for payment |
+| 2026-11-06 | A batch's MRP caps the clinic's price rather than replacing it: a lower clinic price stands, and no batch sells above its label |
+| 2026-11-06 | Opening stock is load-once; quantities are corrected by a count, never another upload |
 | 2026-11-06 | Lab documents are stored in Postgres, for tenant isolation and backups with no new service; object storage is a change to one module when volume calls for it |
 | 2026-10-16 | D1: patient portal kept but hidden; v1 portal code parked in `legacy/v1` |
 | 2026-10-16 | D6: basic starter medicine list, everything customizable per clinic |

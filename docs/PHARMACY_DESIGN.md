@@ -37,6 +37,7 @@ New and changed tables (all clinic-scoped, row-level security as everywhere else
 ### Why these shapes
 
 - **Tax is stored per line, not recomputed.** GST rates change (they did in Sept 2025). A report for last year must show last year's tax, so each sale line keeps the HSN, rate and amounts it was sold with.
+- **Each batch keeps its printed MRP** (`stock_batches.mrp`, for a pack of `pack_size`). The clinic's item price stands, but `batchPrice` never lets a batch sell above what is printed on it. Set from the supplier bill or the import, correctable per batch. See [STOCK_MIGRATION.md](STOCK_MIGRATION.md).
 - **Cost is stored per sale line** (`unit_cost` from the batch) so margin reports do not depend on batches that may later be adjusted.
 - **Cancellation is a credit note**, not a status flag. `pharmacy_sales` is append-only; a sale is "cancelled" when a cancellation note covers it fully. This keeps the audit story and the GST credit-note story identical.
 - **Customers are separate from patients.** Walk-in buyers, B2B buyers (nursing homes) and patients all buy from a pharmacy. A customer may link to a patient; credit is only ever given to a named customer.

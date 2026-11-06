@@ -126,41 +126,67 @@ export async function batchesFor(tx: Tx, drugIds: string[]) {
     .orderBy(asc(stockBatches.expiryDate));
 }
 
-export type ReceiveInput = {
-  drugId: string;
-  batchNo: string;
-  expiryDate: string;
-  quantity: number;
-  unitCost?: string;
-  reason: "opening" | "receipt" | "return";
-  sourceType?: string;
-  sourceId?: string;
-  note?: string;
-};
+/** What is printed on and paid for a batch, when known. */
+export type BatchFacts = { unitCost?: string; mrp?: string; packSize?: number; packCost?: string };
 
-/** Adds stock to a batch (creating the batch the first time it is seen). */
-export async function receiveStock(tx: Tx, clinicId: string, input: ReceiveInput, actorId: string, today: string) {
-  const [drug] = await tx.select().from(drugs).where(eq(drugs.id, input.drugId)).limit(1);
-  if (!drug) throw new AppError("Medicine not found.");
-  if (isExpired(input.expiryDate, today)) throw new AppError(`Batch ${input.batchNo} has already expired.`);
-
+/**
+ * The batch for this item, number and expiry, created empty the first time.
+ * A later bill can supply an MRP the batch did not have, or correct one.
+ */
+export async function ensureBatch(tx: Tx, clinicId: string, input: { drugId: string; batchNo: string; expiryDate: string } & BatchFacts) {
   const batchNo = input.batchNo.trim().toUpperCase();
   await tx
     .insert(stockBatches)
-    .values({ clinicId, drugId: input.drugId, batchNo, expiryDate: input.expiryDate, unitCost: input.unitCost ?? null })
+    .values({ clinicId, drugId: input.drugId, batchNo, expiryDate: input.expiryDate, unitCost: input.unitCost ?? null, mrp: input.mrp ?? null, packSize: input.packSize ?? null, packCost: input.packCost ?? null })
     .onConflictDoNothing();
   const [batch] = await tx
     .select()
     .from(stockBatches)
     .where(and(eq(stockBatches.drugId, input.drugId), eq(stockBatches.batchNo, batchNo), eq(stockBatches.expiryDate, input.expiryDate)))
     .limit(1);
+  if (input.mrp && (batch.mrp === null || Number(batch.mrp) !== Number(input.mrp) || batch.packSize !== (input.packSize ?? null))) {
+    await tx.update(stockBatches).set({ mrp: input.mrp, packSize: input.packSize ?? batch.packSize }).where(eq(stockBatches.id, batch.id));
+    return { ...batch, mrp: input.mrp, packSize: input.packSize ?? batch.packSize };
+  }
+  return batch;
+}
+
+/** Correct a batch's printed MRP. Its stock does not change. */
+export async function setBatchMrp(tx: Tx, batchId: string, mrp: string, packSize: number) {
+  const [row] = await tx.update(stockBatches).set({ mrp, packSize }).where(eq(stockBatches.id, batchId)).returning({ id: stockBatches.id, batchNo: stockBatches.batchNo, drugId: stockBatches.drugId });
+  if (!row) throw new AppError("Batch not found.");
+  return row;
+}
+
+export type ReceiveInput = BatchFacts & {
+  drugId: string;
+  batchNo: string;
+  expiryDate: string;
+  quantity: number;
+  reason: "opening" | "receipt" | "return";
+  sourceType?: string;
+  sourceId?: string;
+  note?: string;
+};
+
+/**
+ * Adds stock to a batch (creating the batch the first time it is seen). Only
+ * opening stock may be expired: it is on the shelf, it has to be counted and
+ * sent back to the supplier, and an expired batch can never be sold.
+ */
+export async function receiveStock(tx: Tx, clinicId: string, input: ReceiveInput, actorId: string, today: string) {
+  const [drug] = await tx.select().from(drugs).where(eq(drugs.id, input.drugId)).limit(1);
+  if (!drug) throw new AppError("Medicine not found.");
+  if (input.reason !== "opening" && isExpired(input.expiryDate, today)) throw new AppError(`Batch ${input.batchNo} has already expired.`);
+
+  const batch = await ensureBatch(tx, clinicId, input);
   await moveStock(
     tx,
     clinicId,
     { drugId: input.drugId, batchId: batch.id, change: input.quantity, reason: input.reason, sourceType: input.sourceType, sourceId: input.sourceId, note: input.note },
     actorId,
   );
-  return { batchId: batch.id, drugName: drug.name, batchNo };
+  return { batchId: batch.id, drugName: drug.name, batchNo: batch.batchNo };
 }
 
 /** A counted correction, or stock written off as expired / damaged. */

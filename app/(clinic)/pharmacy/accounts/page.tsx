@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Building2, Search, Truck, Users, Wallet } from "lucide-react";
+import { Building2, FileUp, Search, Truck, Users, Wallet } from "lucide-react";
+import { ButtonLink } from "@/components/app/buttons";
 import { EmptyState, PageHeader, PageShell, Panel, StatCard } from "@/components/app/page";
 import { DataTable } from "@/components/app/data-table";
 import { TabNav } from "@/components/app/tabs";
@@ -34,8 +35,15 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
       <PageHeader
         icon={Wallet}
         title="Pharmacy accounts"
-        description="What customers owe on credit sales, and what the pharmacy owes its suppliers. Every balance is added up from the documents behind it."
-        actions={tab === "customers" ? <CustomerDialog canSetCredit /> : undefined}
+        description="What customers owe on credit sales, and what the pharmacy owes its suppliers, including what came over from the old software. Every balance is added up from the documents behind it."
+        actions={
+          <>
+            <ButtonLink href="/pharmacy/accounts/opening" variant="secondary">
+              <FileUp className="h-4 w-4" /> Opening balances
+            </ButtonLink>
+            {tab === "customers" && <CustomerDialog canSetCredit />}
+          </>
+        }
       />
       <div className="grid gap-5 sm:grid-cols-2">
         <StatCard
@@ -96,7 +104,7 @@ export default async function AccountsPage({ searchParams }: { searchParams: Pro
           />
         </Panel>
       ) : (
-        <Panel flush title="Suppliers" description="Bills entered, less debit notes and payments.">
+        <Panel flush title="Suppliers" description="Opening balances and bills, less debit notes and payments.">
           <DataTable
             rows={data.suppliers}
             rowKey={(s) => s.id}

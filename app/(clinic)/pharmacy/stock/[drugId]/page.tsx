@@ -13,7 +13,7 @@ import { getDrugStock } from "@/features/pharmacy/stock.service";
 import { aliasesFor } from "@/features/catalog/items.service";
 import { ITEM_TYPE_LABELS, isItemType } from "@/features/catalog/item-rules";
 import { EXPIRY_WARNING_DAYS, expiresWithin, isExpired } from "@/features/pharmacy/stock-rules";
-import { AdjustBatchDialog, ReceiveStockDialog, ReorderLevelForm } from "./StockForms";
+import { AdjustBatchDialog, BatchMrpDialog, ReceiveStockDialog, ReorderLevelForm } from "./StockForms";
 
 export const metadata = { title: "Stock" };
 
@@ -85,8 +85,19 @@ export default async function DrugStockPage({ params }: { params: Promise<{ drug
                 </span>
               ),
             },
+            { key: "mrp", header: "MRP", align: "right", hideOnMobile: true, cell: (b) => (b.mrp ? `₹${b.mrp}${(b.packSize ?? drug.packSize) > 1 ? ` / ${b.packSize ?? drug.packSize}` : ""}` : "—") },
             { key: "qty", header: "On hand", align: "right", cell: (b) => <span className="font-semibold tabular-nums">{b.quantity}</span> },
-            { key: "adjust", header: "", align: "right", cell: (b) => <AdjustBatchDialog batchId={b.id} batchNo={b.batchNo} quantity={b.quantity} /> },
+            {
+              key: "adjust",
+              header: "",
+              align: "right",
+              cell: (b) => (
+                <span className="flex items-center justify-end gap-1">
+                  <BatchMrpDialog batchId={b.id} batchNo={b.batchNo} mrp={b.mrp} packSize={b.packSize ?? drug.packSize} />
+                  <AdjustBatchDialog batchId={b.id} batchNo={b.batchNo} quantity={b.quantity} />
+                </span>
+              ),
+            },
           ]}
         />
       </Panel>

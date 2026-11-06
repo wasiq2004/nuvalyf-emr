@@ -24,6 +24,12 @@ export const stockBatches = appSchema.table(
     /** Maintained by the ledger trigger only. */
     quantity: integer("quantity").notNull().default(0),
     unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
+    /** Printed MRP of one pack of this batch: nothing from it sells above this. */
+    mrp: numeric("mrp", { precision: 12, scale: 2 }),
+    /** Units in the pack the MRP and pack cost are for. */
+    packSize: integer("pack_size"),
+    /** What a pack cost, as the old software or supplier stated it; keeps stock value exact. */
+    packCost: numeric("pack_cost", { precision: 12, scale: 2 }),
     createdAt: createdAt(),
   },
   (t) => [
@@ -32,6 +38,8 @@ export const stockBatches = appSchema.table(
     foreignKey({ name: "stock_batches_drug_fk", columns: [t.clinicId, t.drugId], foreignColumns: [drugs.clinicId, drugs.id] }),
     index("stock_batches_expiry_idx").on(t.clinicId, t.expiryDate),
     check("stock_batches_quantity_check", sql`${t.quantity} >= 0`),
+    check("stock_batches_mrp_check", sql`${t.mrp} IS NULL OR ${t.mrp} >= 0`),
+    check("stock_batches_pack_check", sql`${t.packSize} IS NULL OR ${t.packSize} >= 1`),
   ],
 );
 
@@ -56,6 +64,74 @@ export const stockMovements = appSchema.table(
     index("stock_movements_drug_idx").on(t.clinicId, t.drugId, t.createdAt),
     check("stock_movements_change_check", sql`${t.change} <> 0`),
     check("stock_movements_reason_check", sql`${t.reason} IN ('opening', 'receipt', 'sale', 'dispense', 'adjustment', 'expired', 'damaged', 'return', 'supplier_return')`),
+  ],
+);
+
+/**
+ * A physical count of some or all of the shelves. The count screen and sheet
+ * never show the system figure; each line records it, unseen, at the moment
+ * the count was saved, so a sale after that cannot look like a shortage.
+ */
+export const stockCounts = appSchema.table(
+  "stock_counts",
+  {
+    id: id(),
+    clinicId: clinicId().references(() => clinics.id, { onDelete: "restrict" }),
+    /** SC-000001 */
+    number: varchar("number", { length: 20 }).notNull(),
+    scope: varchar("scope", { length: 10 }).notNull(),
+    scopeLabel: varchar("scope_label", { length: 120 }).notNull(),
+    status: varchar("status", { length: 10 }).notNull().default("counting"),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: createdAt(),
+    submittedBy: uuid("submitted_by"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    postedBy: uuid("posted_by"),
+    postedAt: timestamp("posted_at", { withTimezone: true }),
+  },
+  (t) => [
+    unique("stock_counts_clinic_id_id_key").on(t.clinicId, t.id),
+    uniqueIndex("stock_counts_number_idx").on(t.clinicId, t.number),
+    index("stock_counts_created_idx").on(t.clinicId, t.createdAt),
+    // One open count at a time: two would each correct the same batch.
+    uniqueIndex("stock_counts_one_open_idx").on(t.clinicId).where(sql`status IN ('counting', 'review')`),
+    check("stock_counts_scope_check", sql`${t.scope} IN ('all', 'rack', 'cycle')`),
+    check("stock_counts_status_check", sql`${t.status} IN ('counting', 'review', 'posted', 'cancelled')`),
+  ],
+);
+
+export const stockCountLines = appSchema.table(
+  "stock_count_lines",
+  {
+    id: id(),
+    clinicId: clinicId(),
+    countId: uuid("count_id").notNull(),
+    drugId: uuid("drug_id").notNull(),
+    batchId: uuid("batch_id").notNull(),
+    /** A batch on the shelf that the count did not list. */
+    found: boolean("found").notNull().default(false),
+    firstCount: integer("first_count"),
+    /** The ledger when the first count was saved. */
+    firstSystem: integer("first_system"),
+    firstBy: uuid("first_by"),
+    firstAt: timestamp("first_at", { withTimezone: true }),
+    recount: integer("recount"),
+    /** The ledger when the recount was saved. */
+    recountSystem: integer("recount_system"),
+    recountBy: uuid("recount_by"),
+    recountAt: timestamp("recount_at", { withTimezone: true }),
+    reason: varchar("reason", { length: 20 }),
+    note: varchar("note", { length: 300 }),
+    /** What posting moved, for the record. */
+    postedChange: integer("posted_change"),
+  },
+  (t) => [
+    unique("stock_count_lines_batch_key").on(t.countId, t.batchId),
+    foreignKey({ name: "stock_count_lines_count_fk", columns: [t.clinicId, t.countId], foreignColumns: [stockCounts.clinicId, stockCounts.id] }),
+    foreignKey({ name: "stock_count_lines_batch_fk", columns: [t.clinicId, t.batchId], foreignColumns: [stockBatches.clinicId, stockBatches.id] }),
+    index("stock_count_lines_drug_idx").on(t.clinicId, t.drugId),
+    check("stock_count_lines_quantity_check", sql`(${t.firstCount} IS NULL OR ${t.firstCount} >= 0) AND (${t.recount} IS NULL OR ${t.recount} >= 0)`),
+    check("stock_count_lines_snapshot_check", sql`(${t.firstCount} IS NULL) = (${t.firstSystem} IS NULL) AND (${t.recount} IS NULL) = (${t.recountSystem} IS NULL)`),
   ],
 );
 

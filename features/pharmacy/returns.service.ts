@@ -6,7 +6,7 @@ import "server-only";
 // the same batches through the ledger.
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
-import { pharmacySaleItems, pharmacySales, saleReturnItems, saleReturns, users } from "@/lib/db/schema";
+import { drugs, pharmacySaleItems, pharmacySales, saleReturnItems, saleReturns, stockBatches, users } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
 import { idempotent } from "@/lib/idempotency";
 import { fromMinor, toMinor } from "@/lib/money";
@@ -16,8 +16,11 @@ import { staffName } from "@/features/clinical/encounters.service";
 import { counterKey, documentNumber, fiscalYear } from "./numbering";
 import { addValues, emptyValue, returnValue, returnable, type LineValue } from "./return-rules";
 import { addSourceCharge, chargeForSource } from "@/features/inpatient/inpatient.service";
-import { moveStock } from "./stock.service";
+import { ensureBatch, moveStock } from "./stock.service";
 import { getSale, refreshDispenseStatus } from "./sales.service";
+import { priceSale, stateOfGstin, taxModeFor } from "./gst-rules";
+import { effectiveGst, getPharmacySettings } from "./settings.service";
+import { getCustomer, type CustomerRow } from "./customers.service";
 
 type SaleItem = typeof pharmacySaleItems.$inferSelect;
 
@@ -34,6 +37,7 @@ async function returnedSoFar(tx: Tx, saleItemIds: string[]) {
   if (saleItemIds.length === 0) return map;
   const rows = await tx.select().from(saleReturnItems).where(inArray(saleReturnItems.saleItemId, saleItemIds));
   for (const r of rows) {
+    if (!r.saleItemId) continue;
     const prev = map.get(r.saleItemId) ?? { units: 0, value: emptyValue() };
     map.set(r.saleItemId, {
       units: prev.units + r.quantity,
@@ -150,6 +154,105 @@ export async function createSaleReturn(tx: Tx, clinicId: string, input: SaleRetu
   });
 }
 
+export type OldBillLine = { drugId: string; batchNo: string; expiryDate: string; quantity: number; amount: string; resaleable: boolean };
+
+export type OldBillReturnInput = {
+  oldBillNo: string;
+  oldBillDate: string;
+  customerId?: string | null;
+  customerName?: string;
+  refundMethod: "cash" | "upi" | "card" | "other" | "account";
+  reason: string;
+  lines: OldBillLine[];
+  /** The person has seen the earlier note on this bill and this is a further return. */
+  confirmRepeat?: boolean;
+  idempotencyKey: string;
+};
+
+/**
+ * A customer returns something billed by the old software. There is no sale to
+ * check against, so the pharmacist states the amount from the paper bill, and
+ * the note carries the tax and stock details a sale line would have.
+ */
+export async function createOldBillReturn(tx: Tx, clinicId: string, input: OldBillReturnInput, actorId: string, today: string) {
+  return idempotent(tx, { clinicId, name: "old-bill-return", key: input.idempotencyKey, input: { ...input, idempotencyKey: undefined } }, async () => {
+    if (input.lines.length === 0) throw new AppError("Add what is being returned.");
+    if (input.oldBillDate > today) throw new AppError("The bill date is in the future.");
+    const oldBillNo = input.oldBillNo.trim().toUpperCase();
+    const settings = await getPharmacySettings(tx, clinicId);
+
+    let customer: CustomerRow | null = null;
+    if (input.customerId) {
+      customer = await getCustomer(tx, input.customerId);
+      if (!customer) throw new AppError("Customer not found.");
+    }
+    if (input.refundMethod === "account" && !customer) throw new AppError("Crediting an account needs a named customer.");
+
+    const earlier = await tx.select({ number: saleReturns.number }).from(saleReturns).where(eq(saleReturns.oldBillNo, oldBillNo)).orderBy(desc(saleReturns.createdAt)).limit(1);
+    if (earlier[0] && !input.confirmRepeat) throw new AppError(`Old bill ${oldBillNo} already has credit note ${earlier[0].number}. Tick "further return" if this is a second return on it.`);
+
+    const items = await tx.select().from(drugs).where(inArray(drugs.id, [...new Set(input.lines.map((l) => l.drugId))]));
+    const lines = input.lines.map((line) => {
+      const item = items.find((d) => d.id === line.drugId);
+      if (!item) throw new AppError("A selected item was not found.");
+      return { line, item, gross: toMinor(line.amount), ...effectiveGst(item, settings) };
+    });
+    const mode = taxModeFor(settings.gstScheme, settings.stateCode, customer?.stateCode ?? stateOfGstin(customer?.gstin));
+    const priced = priceSale(lines.map((l) => ({ gross: l.gross, gstRate: l.gstRate })), { discount: 0, roundOff: false, mode });
+
+    const fy = fiscalYear(today);
+    const number = documentNumber("creditNote", fy, await nextCounter(tx, clinicId, counterKey("creditNote", fy)));
+    const [note] = await tx
+      .insert(saleReturns)
+      .values({
+        clinicId,
+        number,
+        fiscalYear: fy,
+        saleId: null,
+        oldBillNo,
+        oldBillDate: input.oldBillDate,
+        customerId: customer?.id ?? null,
+        customerName: customer?.name ?? (input.customerName?.trim() || null),
+        customerGstin: customer?.gstin ?? null,
+        kind: "return",
+        reason: input.reason,
+        refundMethod: input.refundMethod,
+        total: fromMinor(priced.total),
+        roundOff: "0",
+        taxTotal: fromMinor(priced.tax),
+        createdBy: actorId,
+      })
+      .returning({ id: saleReturns.id });
+
+    for (const [i, l] of lines.entries()) {
+      const t = priced.lines[i];
+      const batch = await ensureBatch(tx, clinicId, { drugId: l.item.id, batchNo: l.line.batchNo, expiryDate: l.line.expiryDate });
+      await tx.insert(saleReturnItems).values({
+        clinicId,
+        returnId: note.id,
+        drugId: l.item.id,
+        batchId: batch.id,
+        quantity: l.line.quantity,
+        net: fromMinor(t.net),
+        taxable: fromMinor(t.taxable),
+        cgst: fromMinor(t.cgst),
+        sgst: fromMinor(t.sgst),
+        igst: fromMinor(t.igst),
+        description: [l.item.name, l.item.strength].filter(Boolean).join(" "),
+        hsn: l.hsn,
+        gstRate: String(t.gstRate),
+        unitCost: batch.unitCost,
+      });
+      await moveStock(tx, clinicId, { drugId: l.item.id, batchId: batch.id, change: l.line.quantity, reason: "return", sourceType: "sale_return", sourceId: note.id, note: `Old bill ${oldBillNo}` }, actorId);
+      // Back on the record, but not on the shelf: it must not be sold again.
+      if (!l.line.resaleable) {
+        await moveStock(tx, clinicId, { drugId: l.item.id, batchId: batch.id, change: -l.line.quantity, reason: "damaged", sourceType: "sale_return", sourceId: note.id, note: `Returned on ${number}, not fit to resell` }, actorId);
+      }
+    }
+    return { returnId: note.id, number, oldBillNo, refund: fromMinor(priced.total), refundMethod: input.refundMethod, units: input.lines.reduce((n, l) => n + l.quantity, 0) };
+  });
+}
+
 /** What can still come back from a sale, per line. */
 export async function returnableLines(tx: Tx, saleId: string) {
   const items = await tx.select().from(pharmacySaleItems).where(eq(pharmacySaleItems.saleId, saleId)).orderBy(asc(pharmacySaleItems.id));
@@ -169,24 +272,40 @@ export async function listSaleReturns(tx: Tx, saleId: string) {
 
 export async function getSaleReturn(tx: Tx, id: string) {
   const [row] = await tx
-    .select({ note: saleReturns, sale: pharmacySales, title: users.title, firstName: users.firstName, lastName: users.lastName })
+    .select({ note: saleReturns, title: users.title, firstName: users.firstName, lastName: users.lastName })
     .from(saleReturns)
-    .innerJoin(pharmacySales, eq(pharmacySales.id, saleReturns.saleId))
     .innerJoin(users, eq(users.id, saleReturns.createdBy))
     .where(eq(saleReturns.id, id))
     .limit(1);
   if (!row) return null;
   const items = await tx
-    .select({ ret: saleReturnItems, line: pharmacySaleItems })
+    .select({ ret: saleReturnItems, line: pharmacySaleItems, batchNo: stockBatches.batchNo, expiryDate: stockBatches.expiryDate, form: drugs.form })
     .from(saleReturnItems)
-    .innerJoin(pharmacySaleItems, eq(pharmacySaleItems.id, saleReturnItems.saleItemId))
+    .leftJoin(pharmacySaleItems, eq(pharmacySaleItems.id, saleReturnItems.saleItemId))
+    .innerJoin(stockBatches, eq(stockBatches.id, saleReturnItems.batchId))
+    .innerJoin(drugs, eq(drugs.id, saleReturnItems.drugId))
     .where(and(eq(saleReturnItems.returnId, id)));
-  const sale = (await getSale(tx, row.sale.id))!;
-  const forms = new Map(sale.items.map((i) => [i.id, i.form]));
+  const sale = row.note.saleId ? (await getSale(tx, row.note.saleId))! : null;
+  // An old bill stands in for the sale: the page and PDF read them the same way.
+  const source = sale ?? {
+    number: `old bill ${row.note.oldBillNo}`,
+    documentType: Number(row.note.taxTotal) > 0 ? "tax_invoice" : "bill_of_supply",
+    customer: row.note.customerName ?? "Walk-in customer",
+    customerGstin: row.note.customerGstin,
+    soldAt: new Date(`${row.note.oldBillDate}T00:00:00Z`),
+  };
   return {
     ...row.note,
-    sale,
+    sale: source,
     createdByName: staffName(row),
-    items: items.map((i) => ({ ...i.ret, description: i.line.description, batchNo: i.line.batchNo, expiryDate: i.line.expiryDate, hsn: i.line.hsn, gstRate: i.line.gstRate, form: forms.get(i.line.id) ?? "other" })),
+    items: items.map((i) => ({
+      ...i.ret,
+      description: i.line?.description ?? i.ret.description ?? "",
+      batchNo: i.batchNo,
+      expiryDate: i.expiryDate,
+      hsn: i.line?.hsn ?? i.ret.hsn,
+      gstRate: i.line?.gstRate ?? i.ret.gstRate,
+      form: i.form,
+    })),
   };
 }

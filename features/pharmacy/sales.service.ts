@@ -32,7 +32,7 @@ import { addSourceCharge, getAdmission } from "@/features/inpatient/inpatient.se
 import { needsOverride } from "@/features/clinical/prescribing-rules";
 import { classifyLine, daysLeft, dosageText, type Dosage } from "./dispensing-rules";
 import { isExpired, suggestQuantity } from "./stock-rules";
-import { packWord, sellingPrice, unitsFor, type SoldAs } from "./selling-rules";
+import { batchPrice, packWord, unitsFor, type SoldAs } from "./selling-rules";
 import { priceSale, stateOfGstin, taxModeFor } from "./gst-rules";
 import { counterKey, documentNumber, fiscalYear } from "./numbering";
 import { missingDetails } from "./schedule-rules";
@@ -168,7 +168,8 @@ async function doSell(tx: Tx, clinicId: string, input: Omit<SaleInput, "idempote
     const batch = batches.find((b) => b.id === line.batchId);
     if (!batch || batch.drugId !== drug.id) throw new AppError("A selected batch does not match its medicine.");
     if (isExpired(batch.expiryDate, today)) throw new AppError(`Batch ${batch.batchNo} of ${drug.name} has expired and cannot be sold.`);
-    const price = sellingPrice(drug, soldAs);
+    // Never above what is printed on the batch in the customer's hand.
+    const price = batchPrice(drug, batch, soldAs);
     if (!price) throw new AppError(`${drug.name} has no selling price${soldAs === "pack" ? ` per ${packWord(drug.form)}` : ""}. Set one in Medicines & supplies first.`);
     const each = toMinor(price);
     return { line, batch, drug, soldAs, units, each, gross: each * line.quantity, ...effectiveGst(drug, settings) };
@@ -512,6 +513,8 @@ export async function getPrescriptionForDispensing(tx: Tx, prescriptionId: strin
             batchNo: o.batch.batchNo,
             expiryDate: o.batch.expiryDate,
             quantity: o.batch.quantity,
+            mrp: o.batch.mrp,
+            mrpPackSize: o.batch.packSize,
             prescribed: o.drug.id === item.drugId,
           })),
       };
@@ -607,7 +610,7 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
       rack: string | null;
       /** The search was an exact scan of this item's barcode. */
       barcodeMatch: boolean;
-      batches: { id: string; batchNo: string; expiryDate: string; quantity: number }[];
+      batches: { id: string; batchNo: string; expiryDate: string; quantity: number; mrp: string | null; packSize: number | null }[];
     }
   >();
   for (const r of rows) {
@@ -628,7 +631,7 @@ export async function sellableStock(tx: Tx, query: string, today: string) {
       barcodeMatch: Boolean(r.drug.barcode) && r.drug.barcode === query.trim(),
       batches: [],
     };
-    entry.batches.push({ id: r.batch.id, batchNo: r.batch.batchNo, expiryDate: r.batch.expiryDate, quantity: r.batch.quantity });
+    entry.batches.push({ id: r.batch.id, batchNo: r.batch.batchNo, expiryDate: r.batch.expiryDate, quantity: r.batch.quantity, mrp: r.batch.mrp, packSize: r.batch.packSize });
     byDrug.set(r.drug.id, entry);
   }
   return [...byDrug.values()];

@@ -2,10 +2,11 @@ import "server-only";
 
 // The supplier side (docs/PHARMACY_DESIGN.md 4.3 and 4.4): debit notes for
 // stock sent back (typically expired or damaged), payments, and what each
-// supplier is owed = bills - debit notes - payments, summed from documents.
+// supplier is owed = opening balance + bills - debit notes - payments, summed
+// from documents.
 import { asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import type { Tx } from "@/lib/db";
-import { drugs, purchaseBillItems, purchaseBills, purchaseReturnItems, purchaseReturns, stockBatches, supplierPayments, suppliers, users } from "@/lib/db/schema";
+import { accountOpenings, drugs, purchaseBillItems, purchaseBills, purchaseReturnItems, purchaseReturns, stockBatches, supplierPayments, suppliers, users } from "@/lib/db/schema";
 import { AppError } from "@/lib/errors";
 import { idempotent } from "@/lib/idempotency";
 import { fromMinor, toMinor } from "@/lib/money";
@@ -160,7 +161,8 @@ export async function getPurchaseReturn(tx: Tx, id: string) {
 
 /** What the pharmacy owes each supplier (positive = owes the supplier). */
 const owedSql = sql<string>`(
-  coalesce((select sum(b.total) from app.purchase_bills b where b.supplier_id = ${sql.raw('"suppliers"."id"')}), 0)
+  coalesce((select sum(o.amount) from app.account_openings o where o.supplier_id = ${sql.raw('"suppliers"."id"')}), 0)
+  + coalesce((select sum(b.total) from app.purchase_bills b where b.supplier_id = ${sql.raw('"suppliers"."id"')}), 0)
   - coalesce((select sum(r.total) from app.purchase_returns r where r.supplier_id = ${sql.raw('"suppliers"."id"')}), 0)
   - coalesce((select sum(p.amount) from app.supplier_payments p where p.supplier_id = ${sql.raw('"suppliers"."id"')}), 0)
 )::numeric(12,2)::text`;
@@ -190,7 +192,12 @@ export async function supplierLedger(tx: Tx, supplierId: string) {
     .select({ id: supplierPayments.id, number: supplierPayments.number, date: supplierPayments.createdAt, amount: supplierPayments.amount, method: supplierPayments.method, reference: supplierPayments.reference })
     .from(supplierPayments)
     .where(eq(supplierPayments.supplierId, supplierId));
+  const openings = await tx.select().from(accountOpenings).where(eq(accountOpenings.supplierId, supplierId));
   const entries = [
+    ...openings.map((o) => {
+      const owed = toMinor(o.amount) > 0;
+      return { kind: "opening" as const, id: o.id, number: o.reference ?? "Opening", date: o.createdAt, credit: owed ? o.amount : "0.00", debit: owed ? "0.00" : o.amount.replace("-", ""), note: [`Opening balance as of ${o.asOf}`, o.note].filter(Boolean).join(" · ") };
+    }),
     ...bills.map((b) => ({ kind: "bill" as const, id: b.id, number: b.number, date: b.date, credit: b.total, debit: "0.00", note: `Bill ${b.billNo}` })),
     ...notes.map((n) => ({ kind: "debit_note" as const, id: n.id, number: n.number, date: n.date, credit: "0.00", debit: n.total, note: n.reason })),
     ...payments.map((p) => ({ kind: "payment" as const, id: p.id, number: p.number, date: p.date, credit: "0.00", debit: p.amount, note: `${p.method.toUpperCase()}${p.reference ? ` ${p.reference}` : ""}` })),
