@@ -8,6 +8,7 @@
 import { boolean, check, date, foreignKey, index, integer, jsonb, numeric, primaryKey, text, timestamp, unique, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
+import { encryptedText } from "./_encrypted";
 import { clinics } from "./platform";
 import { drugs } from "./catalog";
 import { patients } from "./frontdesk";
@@ -298,10 +299,10 @@ export const prescriptionQueries = appSchema.table(
     prescriptionItemId: uuid("prescription_item_id"),
     /** Who must answer: the prescriber at the time. */
     addressedTo: uuid("addressed_to").notNull(),
-    message: text("message").notNull(),
+    message: encryptedText("prescription_queries", "message").notNull(),
     raisedBy: uuid("raised_by").notNull(),
     raisedAt: timestamp("raised_at", { withTimezone: true }).notNull().defaultNow(),
-    response: text("response"),
+    response: encryptedText("prescription_queries", "response"),
     answeredBy: uuid("answered_by"),
     answeredAt: timestamp("answered_at", { withTimezone: true }),
   },

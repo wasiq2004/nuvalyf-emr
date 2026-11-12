@@ -2,7 +2,7 @@
 // definition, version and column list in a header block. Refused for cohorts
 // below the suppression threshold. Every export is recorded and audited.
 import { z } from "zod";
-import { can, getClinicSession, hasModule, recordDenied } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, recordDenied, setupPending } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { AppError } from "@/lib/errors";
@@ -13,7 +13,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "analytics")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "analytics")) return new Response("Not allowed.", { status: 403 });
   if (!can(ctx, "analytics:manage")) {
     await recordDenied(ctx, "PAGE_ACCESS_DENIED", { required: "analytics:manage", path: "/analytics/cohorts/[id]/export" });
     return new Response("Not allowed.", { status: 403 });

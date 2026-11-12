@@ -5,6 +5,7 @@
 import { boolean, check, foreignKey, index, integer, jsonb, numeric, timestamp, unique, uniqueIndex, uuid, varchar, text } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
+import { encryptedJson } from "./_encrypted";
 import { clinics } from "./platform";
 import { users } from "./identity";
 import { patients, visits } from "./frontdesk";
@@ -215,8 +216,8 @@ export const dischargeSummaries = appSchema.table(
     clinicId: clinicId(),
     admissionId: uuid("admission_id").notNull(),
     status: varchar("status", { length: 10 }).notNull().default("draft"),
-    /** [{ key, title, body }] in print order. */
-    sections: jsonb("sections").notNull(),
+    /** [{ key, title, body }] in print order. Encrypted in the application. */
+    sections: encryptedJson<unknown>("discharge_summaries", "sections").notNull(),
     signedBy: uuid("signed_by"),
     signedByName: varchar("signed_by_name", { length: 200 }),
     signedRegistration: text("signed_registration"),

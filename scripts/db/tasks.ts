@@ -6,6 +6,7 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { hash } from "@node-rs/argon2";
+import { databaseSsl } from "../../lib/db/ssl";
 
 dotenv.config({ path: [".env.local", ".env"], quiet: true });
 
@@ -27,10 +28,11 @@ export function requireEnv(name: string): string {
 }
 
 export function ownerConnection(): Sql {
-  return postgres(requireEnv("DATABASE_OWNER_URL"), {
+  const url = requireEnv("DATABASE_OWNER_URL");
+  return postgres(url, {
     max: 1,
     onnotice: () => {},
-    ssl: process.env.DATABASE_SSL === "require" ? "require" : false,
+    ssl: databaseSsl(url),
   });
 }
 
@@ -49,7 +51,7 @@ export async function ensureDatabase() {
   const admin = postgres(url.toString(), {
     max: 1,
     onnotice: () => {},
-    ssl: process.env.DATABASE_SSL === "require" ? "require" : false,
+    ssl: databaseSsl(url.toString()),
   });
   try {
     const [exists] = await admin`select 1 from pg_database where datname = ${database}`;

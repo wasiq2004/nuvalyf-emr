@@ -1,6 +1,6 @@
 // GET /inpatient/:id/bill -> the interim bill, or the final bill after discharge.
 import { z } from "zod";
-import { can, getClinicSession, hasModule } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, setupPending } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { todayInTimeZone } from "@/lib/time";
 import { admissionBill, getAdmission } from "@/features/inpatient/inpatient.service";
@@ -11,7 +11,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "inpatient") || !can(ctx, "inpatient:read")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "inpatient") || !can(ctx, "inpatient:read")) return new Response("Not allowed.", { status: 403 });
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) return new Response("Not found", { status: 404 });
   const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => {

@@ -1,6 +1,6 @@
 // GET /pharmacy/stock/counts/:id/sheet -> the printed count sheet (no system figures).
 import { z } from "zod";
-import { can, getClinicSession, hasModule } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, setupPending } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { blindLines, getCountHeader } from "@/features/pharmacy/stock-count.service";
 import { pdfResponse, pharmacyPdfContext } from "@/features/pharmacy/pdf-context";
@@ -10,7 +10,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "pharmacy") || !can(ctx, "stock:manage")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "pharmacy") || !can(ctx, "stock:manage")) return new Response("Not allowed.", { status: 403 });
   const { id } = await params;
   if (!z.uuid().safeParse(id).success) return new Response("Not found", { status: 404 });
   const data = await withClinic({ clinicId: ctx.clinicId, userId: ctx.userId }, async (tx) => {

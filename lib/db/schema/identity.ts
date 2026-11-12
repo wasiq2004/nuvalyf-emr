@@ -5,6 +5,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   primaryKey,
   text,
   timestamp,
@@ -15,6 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
+import { encryptedText } from "./_encrypted";
 import { clinics } from "./platform";
 
 export const users = appSchema.table(
@@ -38,6 +40,15 @@ export const users = appSchema.table(
     registrationCouncil: varchar("registration_council", { length: 150 }),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     passwordChangedAt: timestamp("password_changed_at", { withTimezone: true }),
+    /** Two-step sign-in (TOTP). The secrets are encrypted in the application. */
+    mfaSecret: encryptedText("users", "mfa_secret"),
+    /** Set while the person is adding the account to their authenticator app. */
+    mfaPendingSecret: encryptedText("users", "mfa_pending_secret"),
+    mfaEnabledAt: timestamp("mfa_enabled_at", { withTimezone: true }),
+    /** The last time step accepted: a code cannot be used twice. */
+    mfaLastStep: integer("mfa_last_step"),
+    /** SHA-256 of each unused recovery code. */
+    mfaRecoveryHashes: jsonb("mfa_recovery_hashes").$type<string[]>().notNull().default([]),
     createdBy: uuid("created_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

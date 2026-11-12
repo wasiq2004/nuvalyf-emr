@@ -1,6 +1,6 @@
 // GET /audit/export?<filters> -> the filtered audit trail as CSV (up to 10,000
 // rows). The export itself is audited, with the filters used.
-import { can, getClinicSession, recordDenied } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, recordDenied, setupPending } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
@@ -14,7 +14,7 @@ export async function GET(request: Request) {
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword) return new Response("Change your password first.", { status: 403 });
+  if (setupPending(ctx)) return new Response("Finish setting up your account first.", { status: 403 });
   if (!can(ctx, "audit:read")) {
     await recordDenied(ctx, "PAGE_ACCESS_DENIED", { required: "audit:read", path: "/audit/export" });
     return new Response("Not allowed.", { status: 403 });

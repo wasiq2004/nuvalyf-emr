@@ -17,6 +17,12 @@ export const PLATFORM_SESSION_SECONDS = 60 * 60;
 class RateLimited extends CredentialsSignin {
   code = "rate_limited";
 }
+class MfaRequired extends CredentialsSignin {
+  code = "mfa_required";
+}
+class MfaInvalid extends CredentialsSignin {
+  code = "mfa_invalid";
+}
 class AccountDisabled extends CredentialsSignin {
   code = "account_disabled";
 }
@@ -24,6 +30,7 @@ class AccountDisabled extends CredentialsSignin {
 const credentialsSchema = z.object({
   email: z.string().trim().min(1).max(255),
   password: z.string().min(1).max(200),
+  code: z.string().trim().max(20).optional(),
 });
 
 export const {
@@ -56,7 +63,7 @@ export const {
   providers: [
     Credentials({
       id: "operator",
-      credentials: { email: {}, password: {} },
+      credentials: { email: {}, password: {}, code: {} },
       async authorize(raw, request) {
         const parsed = credentialsSchema.safeParse(raw);
         if (!parsed.success) return null;
@@ -65,6 +72,8 @@ export const {
         if (!result.ok) {
           if (result.reason === "rate_limited") throw new RateLimited();
           if (result.reason === "account_disabled") throw new AccountDisabled();
+          if (result.reason === "mfa_required") throw new MfaRequired();
+          if (result.reason === "mfa_invalid") throw new MfaInvalid();
           return null;
         }
 

@@ -288,6 +288,16 @@ From the client's voice notes (in-house pharmacy runs off supplier bills; compan
 - [x] Supporting documents (PDF, JPG, PNG): type checked from the content, shown in the patient record and consultation, printed after the report, late ones return to Unread, removal needs a reason
 - [x] Migration 0024; see [LAB_REPORTS.md](LAB_REPORTS.md)
 
+## Security hardening for licensing ✅
+
+- [x] Backups encrypted before they reach disk (GnuPG, AES-256, public key; private key off the server); checksum; restore verifies both
+- [x] Database TLS 1.2+ with certificate and host name verified; `pg_hba.conf` refuses plain connections; production refuses to start without it
+- [x] `DATA_ENCRYPTION_KEY` required; key ids in every value; `ops:rotate-key` re-encrypts and `--check` proves it
+- [x] Clinical notes, lab documents, queries, discharge summaries and two-step secrets encrypted in the application (AES-256-GCM, bound to their column); old rows encrypted by the same command
+- [x] Two-step sign-in (TOTP, recovery codes), required for Clinic Admins and operators; admin reset; command-line reset for the last Platform Admin
+- [x] Log retention: journald override, connection logging, `check-log-retention.sh`; disk encryption and CERT-In steps documented
+- [x] Migration 0026; see [SECURITY.md](SECURITY.md) and [OPERATIONS.md](OPERATIONS.md)
+
 ## Client request: moving pharmacy stock from old software ✅
 
 - [x] Opening stock loads once: a batch already in stock is refused; a wrong load can be reversed until something is sold

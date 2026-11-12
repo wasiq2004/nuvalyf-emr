@@ -24,6 +24,16 @@ Pick the guide for your role. If you hold more than one role (for example Clinic
 
 Forgot your password? Ask your Clinic Admin. They can issue a new one-time password.
 
+### Two-step sign-in
+
+With two-step sign-in on, signing in also needs the 6-digit code from an authenticator app on your phone (Google Authenticator, Microsoft Authenticator or similar). Someone who learns your password still cannot get in.
+
+- **Clinic Admins must use it.** After your first password change, NuvaLyf asks you to set it up before anything else opens. Anyone else can turn it on under **My account > Two-step sign-in**.
+- **Setting up:** click **Set up two-step sign-in**. In your app, add an account, choose "Enter a setup key" and type the key shown. On your phone, **Open it in the authenticator app** does this for you. Then enter the code the app shows.
+- **Recovery codes:** ten codes appear once. Save them away from your phone. Each one signs you in once if the phone is lost.
+- **Signing in:** after your password, enter the newest code from the app. A code works once: if it is refused, wait for the next one.
+- **Lost your phone?** Use a recovery code, or ask your Clinic Admin to **Reset** two-step sign-in. You then set it up again.
+
 You are signed out automatically 8 hours after signing in, even if you are active, so sign in at the start of each shift. You are also signed out if your password or access changes.
 
 ### Finding your way

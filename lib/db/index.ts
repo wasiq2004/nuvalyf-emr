@@ -11,6 +11,7 @@ import postgres from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { sql } from "drizzle-orm";
 import * as schema from "./schema";
+import { databaseSsl } from "./ssl";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 export type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -36,7 +37,7 @@ function createPool(name: PoolName, url: string): Pool {
     max: Number(process.env.DATABASE_POOL_MAX ?? 10),
     idle_timeout: 20,
     connect_timeout: 10,
-    ssl: process.env.DATABASE_SSL === "require" ? "require" : false,
+    ssl: databaseSsl(url),
     onnotice: () => {},
     connection: { application_name: `medflow-${name}` },
   });

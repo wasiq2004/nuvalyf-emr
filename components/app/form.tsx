@@ -26,6 +26,7 @@ export function ActionForm<R>({
   children,
   successMessage,
   onSuccess,
+  onError,
   resetOnSuccess = false,
   refresh = true,
   className,
@@ -34,6 +35,8 @@ export function ActionForm<R>({
   children: React.ReactNode;
   successMessage?: string;
   onSuccess?: (data: R) => void;
+  /** Sees a refusal too, e.g. to reveal a field the server asked for. */
+  onError?: (error: string, fieldErrors: Record<string, string>) => void;
   resetOnSuccess?: boolean;
   refresh?: boolean;
   className?: string;
@@ -63,6 +66,7 @@ export function ActionForm<R>({
     if (!result.ok) {
       setError(result.error);
       setFieldErrors(result.fieldErrors ?? {});
+      onError?.(result.error, result.fieldErrors ?? {});
       return;
     }
 

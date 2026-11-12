@@ -7,7 +7,7 @@
 import {
   boolean,
   check,
-  customType,
+
   foreignKey,
   index,
   integer,
@@ -22,6 +22,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { appSchema, clinicId, createdAt, id, updatedAt } from "./_shared";
+import { encryptedBytes, encryptedText } from "./_encrypted";
 import { clinics } from "./platform";
 import { users } from "./identity";
 import { patients, visits } from "./frontdesk";
@@ -36,13 +37,14 @@ export const encounters = appSchema.table(
     patientId: uuid("patient_id").notNull(),
     doctorId: uuid("doctor_id"),
     status: varchar("status", { length: 20 }).notNull().default("open"),
-    chiefComplaint: text("chief_complaint"),
-    history: text("history"),
-    examination: text("examination"),
-    plan: text("plan"),
+    // The consultation notes are encrypted in the application (./_encrypted).
+    chiefComplaint: encryptedText("encounters", "chief_complaint"),
+    history: encryptedText("encounters", "history"),
+    examination: encryptedText("encounters", "examination"),
+    plan: encryptedText("encounters", "plan"),
     followUp: varchar("follow_up", { length: 200 }),
     /** Written in triage, for the doctor to read before seeing the patient. */
-    nursingNotes: text("nursing_notes"),
+    nursingNotes: encryptedText("encounters", "nursing_notes"),
     triageNotesBy: uuid("triage_notes_by"),
     triageNotesAt: timestamp("triage_notes_at", { withTimezone: true }),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
@@ -79,7 +81,7 @@ export const vitals = appSchema.table(
     heightCm: numeric("height_cm", { precision: 5, scale: 1 }),
     /** Computed on the server against the clinic's age-banded ranges. */
     flags: jsonb("flags").notNull().default({}),
-    notes: text("notes"),
+    notes: encryptedText("vitals", "notes"),
     recordedBy: uuid("recorded_by").notNull(),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -221,7 +223,7 @@ export const encounterAmendments = appSchema.table(
     clinicId: clinicId(),
     encounterId: uuid("encounter_id").notNull(),
     authorId: uuid("author_id").notNull(),
-    text: text("text").notNull(),
+    text: encryptedText("encounter_amendments", "text").notNull(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -237,7 +239,7 @@ export const privateNotes = appSchema.table(
     clinicId: clinicId(),
     encounterId: uuid("encounter_id").notNull(),
     authorId: uuid("author_id").notNull(),
-    text: text("text").notNull(),
+    text: encryptedText("private_notes", "text").notNull(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -258,13 +260,13 @@ export const labOrders = appSchema.table(
     testName: varchar("test_name", { length: 200 }).notNull(),
     unit: varchar("unit", { length: 40 }),
     referenceRange: varchar("reference_range", { length: 200 }),
-    notes: text("notes"),
+    notes: encryptedText("lab_orders", "notes"),
     status: varchar("status", { length: 20 }).notNull().default("ordered"),
     orderedBy: uuid("ordered_by").notNull(),
     orderedAt: timestamp("ordered_at", { withTimezone: true }).notNull().defaultNow(),
     resultValue: varchar("result_value", { length: 500 }),
     resultFlag: varchar("result_flag", { length: 20 }),
-    resultNotes: text("result_notes"),
+    resultNotes: encryptedText("lab_orders", "result_notes"),
     resultedBy: uuid("resulted_by"),
     resultedAt: timestamp("resulted_at", { withTimezone: true }),
     /** Results return to the ordering doctor and stay visible until read. */
@@ -316,7 +318,6 @@ export const labResults = appSchema.table(
   ],
 );
 
-const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
 /**
  * A file attached to a lab test. Never deleted or edited: a wrong file is
@@ -363,7 +364,7 @@ export const labDocumentFiles = appSchema.table(
   {
     documentId: uuid("document_id").primaryKey(),
     clinicId: clinicId(),
-    content: bytea("content").notNull(),
+    content: encryptedBytes("lab_document_files", "content").notNull(),
   },
   (t) => [foreignKey({ name: "lab_document_files_document_fk", columns: [t.clinicId, t.documentId], foreignColumns: [labDocuments.clinicId, labDocuments.id] })],
 );

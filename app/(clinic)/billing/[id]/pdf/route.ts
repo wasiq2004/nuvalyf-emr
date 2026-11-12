@@ -1,6 +1,6 @@
 // GET /billing/:id/pdf -> the invoice (or receipt, once paid) as a PDF.
 import { z } from "zod";
-import { can, getClinicSession, recordDenied } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, recordDenied, setupPending } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
@@ -12,7 +12,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in to view this invoice.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword) return new Response("Change your password first.", { status: 403 });
+  if (setupPending(ctx)) return new Response("Finish setting up your account first.", { status: 403 });
   if (!can(ctx, "billing:read")) {
     await recordDenied(ctx, "PAGE_ACCESS_DENIED", { required: "billing:read", path: "/billing/[id]/pdf" });
     return new Response("You don't have permission to view invoices.", { status: 403 });

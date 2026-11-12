@@ -17,12 +17,16 @@ To report a vulnerability, email the maintainers rather than opening a public is
 | G7 | Auditors see who did what, never clinical content | Compliance panel shows an allow-list of detail fields; clinical fields are withheld and counted; ESLint stops compliance code importing clinical modules | `compliance.test.ts`, `audit.test.ts` |
 | G8 | Analysts never see identifiable patients | Analytics actions accept only strict schemas (unknown fields rejected); output is per-cohort HMAC pseudonyms, 5-year age bands, whole months; cells below the clinic's threshold (default 5, minimum 3) are suppressed and small cohorts cannot be exported | `analytics.test.ts`: no seeded name, mobile, record number or id appears in any output |
 | G9 | Stock and money cannot be double-counted | Stock ledger with a `quantity >= 0` CHECK; idempotency keys on payments, sales and imports; integer minor units | `pharmacy.test.ts`, `billing.test.ts`, load test |
-| G10 | Third-party secrets are not stored in plain text | WhatsApp tokens encrypted with AES-256-GCM (`DATA_ENCRYPTION_KEY`); never sent back to the browser | `messaging-import.test.ts` |
+| G10 | Clinical notes, lab documents and secrets are unreadable in the database, its files and its backups | AES-256-GCM in the application (`lib/crypto-core.ts`), each value bound to its column; the list is `lib/encrypted-fields.ts` | `encryption-at-rest.test.ts` reads every encrypted column as the owner and finds only ciphertext; `encryption.test.ts` |
+| G11 | Every connection to the database is encrypted, and the server is verified | TLS 1.2+ with `DATABASE_SSL=verify-full` against our own CA; `db/pg_hba.conf` refuses any network connection without TLS; production refuses to start without the setting | `database-tls.test.ts`: plain, wrong-CA and wrong-name connections refused |
+| G12 | A backup is useless to whoever takes it | Streamed into GnuPG (AES-256) to a public key; the private key is never on the server; the script refuses to write a plain dump | Backup checks: no plain header or patient text in the file, no decryption without the key, a changed byte is refused |
+| G13 | A stolen password alone does not open a Clinic Admin's or an operator's account | TOTP two-step sign-in (RFC 6238), required for Clinic Admins and every operator; codes cannot be replayed; recovery codes are hashed and single-use | `totp.test.ts` (RFC test vectors), `two-step.test.ts` |
 
 ## Authentication
 
 - **Two separate sign-ins.** Clinic staff and console operators use separate Auth.js instances with different cookies (`medflow.clinic`, `medflow.platform`) and secrets. Over https the cookies use the `__Secure-` prefix and are `HttpOnly`, `SameSite=Lax`.
 - **Passwords** are hashed with argon2id. Accounts are created by an administrator with a one-time temporary password, which must be changed at first sign-in. New passwords must be at least 10 characters for clinic staff and 12 for console operators.
+- **Two-step sign-in** (TOTP, any authenticator app). Required for Clinic Admins and every console operator, who are sent to set it up after their first password change and can open nothing else until they do. Optional for other staff. A code is accepted once (the last time step is stored), with one step of clock drift either way. Ten recovery codes are shown once and stored as SHA-256 hashes. The TOTP secret is encrypted in the database. A lost phone: another administrator resets it (audited, ends every session); for the only Platform Admin, `npm run db:reset-operator-mfa` on the server.
 - **Session lifetime is absolute and never extended by activity:** 8 hours for clinic staff (a working shift) and 1 hour for the console.
 - **Revocation.** A password change, deactivation or admin reset bumps the user's session version. Older cookies are rejected on their next request. A new version is accepted only with a server-minted HMAC proof (`lib/auth/session-proof.ts`), so a stolen cookie cannot revive itself through the Auth.js update endpoint.
 - **Rate limits** are held in Postgres, so they apply across all app instances:
@@ -51,10 +55,14 @@ Separation-of-duty rules:
 
 ## Data protection
 
-- **In transit:** run behind TLS (see [OPERATIONS.md](OPERATIONS.md)). HSTS is sent, and the CSP upgrades insecure requests when `AUTH_URL` is https.
-- **At rest:** use encrypted storage for the database volume and backups. Third-party tokens are additionally encrypted by the application.
+- **Browser to server:** TLS at the reverse proxy (see [OPERATIONS.md](OPERATIONS.md)). HSTS is sent, and the CSP upgrades insecure requests when `AUTH_URL` is https.
+- **App to database:** TLS 1.2 or later, certificate and host name verified against the deployment's own CA. The database refuses unencrypted network connections. The web server and worker refuse to start without the setting.
+- **In the database:** consultation notes (chief complaint, history, examination, plan, nursing notes), vitals notes, amendments, private notes, lab order and result notes, lab documents, pharmacist-doctor queries, discharge summaries, WhatsApp tokens and two-step secrets are encrypted by the application with AES-256-GCM. Each value carries its key's id and is bound to its table and column. Patient names, phone numbers, diagnoses, prescriptions and lab values stay readable to the database, because search, billing, reports and trends work on them, and are protected by disk encryption.
+- **Keys:** `DATA_ENCRYPTION_KEY` is required (the server will not start without it in production) and can be rotated without downtime: `npm run ops:rotate-key` re-encrypts every value, and `--check` proves none remain under the old key.
+- **Disk:** the volume holding the database, logs and local backups must be encrypted (cloud volume encryption or LUKS; OPERATIONS.md, "Disk encryption").
+- **Backups:** encrypted before they reach disk (OpenPGP, AES-256) to a public key whose private half is kept off the server; a checksum is written beside each.
 - **Exports:** audit CSV and analytics exports are themselves audited. CSV cells are escaped against formula injection.
-- **Logs:** database errors pass through `describeError`, which drops query parameters so patient data does not reach server logs.
+- **Logs:** database errors pass through `describeError`, which drops query parameters so patient data does not reach server logs. Database connections are logged with time, user and client. Retention of 180 days in India is set on the host (`docker-compose.logging.yml`, `scripts/ops/check-log-retention.sh`).
 - **Messaging consent** is an append-only event history. Broadcasts go only to patients whose latest event is an opt-in; reminders respect opt-outs.
 
 ## Browser protections
@@ -79,12 +87,12 @@ None of the runtime roles is `SUPERUSER` or has `BYPASSRLS`. `FORCE ROW LEVEL SE
 | Risk | Status |
 | --- | --- |
 | A01 Broken access control | Four independent layers (proxy, page guard, action wrapper, RLS); generated permission matrix; cross-clinic tests on every table |
-| A02 Cryptographic failures | argon2id, AES-256-GCM for secrets, `__Secure-` cookies, HSTS. TLS is the deployer's job (OPERATIONS.md) |
+| A02 Cryptographic failures | argon2id passwords; AES-256-GCM for clinical notes, documents and secrets with rotatable keys; TLS 1.2+ to the database, verified; encrypted backups; `__Secure-` cookies, HSTS. Browser TLS is at the reverse proxy |
 | A03 Injection | Drizzle parameterised queries. The few raw SQL fragments use tagged templates; identifiers are never built from input. CSV formula escaping |
 | A04 Insecure design | Threat-driven guarantees (above), immutability and append-only enforced in the database |
 | A05 Security misconfiguration | Strict CSP and security headers; database bound to localhost; required secrets fail fast; separate secrets per panel |
 | A06 Vulnerable components | `npm audit --omit=dev --audit-level=high` in CI. 0 production vulnerabilities at launch; unused dependencies removed |
-| A07 Identification and authentication failures | Rate limits, forced password change, absolute session caps, revocation with HMAC proofs |
+| A07 Identification and authentication failures | Rate limits, forced password change, TOTP two-step sign-in for administrators, absolute session caps, revocation with HMAC proofs |
 | A08 Software and data integrity failures | Lockfile + `npm ci`; migrations checked against the schema in CI; idempotency keys |
 | A09 Security logging and monitoring failures | Append-only audit of every write, sign-in and refusal; critical-severity summary in the compliance panel; worker heartbeat in `/api/health` |
 | A10 SSRF | The only outbound call is to the fixed WhatsApp Cloud API host; no user-supplied URLs are fetched |
@@ -108,7 +116,10 @@ An independent review of the whole codebase against the guarantees above found t
 
 ## Known limitations and accepted risks
 
-- **No multi-factor authentication yet.** Recommended next for the console and Clinic Admins.
 - **`style-src 'unsafe-inline'`** is required by React style attributes and UI libraries. Script injection is still blocked by the nonce.
-- **Encryption at rest of the database** depends on the hosting disk or volume encryption.
+- **Searchable patient data** (names, phone numbers, diagnoses, prescriptions, lab values) is protected by disk encryption, not by the application. Encrypting it in the application would break search, duplicate checks, billing and reports.
+- **Two-step sign-in is optional for roles other than Clinic Admin.** A clinic that wants it for everyone can ask staff to turn it on; a per-clinic setting to require it is not built yet.
+- **The setup page shows the key to type, not a QR code.** No QR library is bundled; the `otpauth://` link opens the authenticator app directly on a phone.
+- **Lab documents keep a SHA-256 of the plain file**, used to refuse the same file twice. It reveals only whether a known file is stored.
+- **An external security audit** (CERT-In empanelled, a WASA for ABDM) has not been done. Everything above is the team's own testing.
 - **Patient portal** is hidden (decision D1). It needs its own review before it is switched on.

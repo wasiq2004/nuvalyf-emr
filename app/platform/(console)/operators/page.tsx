@@ -6,7 +6,7 @@ import { requireOperator } from "@/lib/auth/platform-session";
 import { withPlatform } from "@/lib/db";
 import { listOperators } from "@/features/platform/operators.service";
 import { formatRelative } from "@/lib/format";
-import { CreateOperatorDialog, EditOperatorDialog, ResetOperatorPasswordDialog } from "./OperatorForms";
+import { CreateOperatorDialog, EditOperatorDialog, ResetOperatorPasswordDialog, ResetOperatorTwoStepButton } from "./OperatorForms";
 
 export const metadata = { title: "Operators · Operations console" };
 
@@ -55,6 +55,7 @@ export default async function OperatorsPage() {
               cell: (o) => <StatusBadge tone={o.status === "active" ? "success" : "neutral"}>{o.status}</StatusBadge>,
             },
             { key: "login", header: "Last sign-in", hideOnMobile: true, cell: (o) => formatRelative(o.lastLoginAt) },
+            { key: "mfa", header: "Two-step", hideOnMobile: true, cell: (o) => <StatusBadge tone={o.mfaEnabledAt ? "success" : "warning"}>{o.mfaEnabledAt ? "On" : "Not set up"}</StatusBadge> },
             {
               key: "actions",
               header: "",
@@ -64,6 +65,7 @@ export default async function OperatorsPage() {
                   <div className="flex justify-end gap-2">
                     <EditOperatorDialog id={o.id} name={o.name} role={o.role} status={o.status} />
                     <ResetOperatorPasswordDialog id={o.id} email={o.email} />
+                    {o.mfaEnabledAt && <ResetOperatorTwoStepButton id={o.id} email={o.email} />}
                   </div>
                 ),
             },

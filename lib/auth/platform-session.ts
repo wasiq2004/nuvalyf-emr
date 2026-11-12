@@ -15,6 +15,9 @@ export type OperatorContext = {
   name: string;
   role: OperatorRole;
   mustChangePassword: boolean;
+  mfaEnabled: boolean;
+  /** Every operator uses two-step sign-in; nothing opens until it is set up. */
+  mustEnrollMfa: boolean;
 };
 
 type OperatorSessionState = { status: "ok"; ctx: OperatorContext } | { status: "signed_out" | "disabled" | "expired" };
@@ -24,7 +27,11 @@ export const getOperatorSession = cache(async (): Promise<OperatorSessionState> 
   if (!session?.oid || typeof session.sv !== "number") return { status: "signed_out" };
 
   const [operator] = await withPlatform((db) =>
-    db.select().from(operators).where(eq(operators.id, session.oid!)).limit(1),
+    db
+      .select({ id: operators.id, email: operators.email, name: operators.name, role: operators.role, status: operators.status, sessionVersion: operators.sessionVersion, mustChangePassword: operators.mustChangePassword, mfaEnabledAt: operators.mfaEnabledAt })
+      .from(operators)
+      .where(eq(operators.id, session.oid!))
+      .limit(1),
   );
   if (!operator) return { status: "signed_out" };
   if (operator.status !== "active") return { status: "disabled" };
@@ -38,13 +45,15 @@ export const getOperatorSession = cache(async (): Promise<OperatorSessionState> 
       name: operator.name,
       role: operator.role as OperatorRole,
       mustChangePassword: operator.mustChangePassword,
+      mfaEnabled: Boolean(operator.mfaEnabledAt),
+      mustEnrollMfa: !operator.mfaEnabledAt,
     },
   };
 });
 
 /** Page guard for the operations console. */
 export async function requireOperator(
-  options: { role?: OperatorRole; allowPendingPasswordChange?: boolean } = {},
+  options: { role?: OperatorRole; allowPendingPasswordChange?: boolean; allowPendingMfa?: boolean } = {},
 ): Promise<OperatorContext> {
   const state = await getOperatorSession();
   if (state.status !== "ok") {
@@ -53,6 +62,9 @@ export async function requireOperator(
   const { ctx } = state;
   if (ctx.mustChangePassword && !options.allowPendingPasswordChange) {
     redirect("/platform/account/password");
+  }
+  if (ctx.mustEnrollMfa && !options.allowPendingMfa && !options.allowPendingPasswordChange) {
+    redirect("/platform/account/two-step");
   }
   if (options.role === "platform_admin" && ctx.role !== "platform_admin") {
     forbidden();

@@ -23,11 +23,18 @@ class ClinicSuspended extends CredentialsSignin {
 class AccountDisabled extends CredentialsSignin {
   code = "account_disabled";
 }
+class MfaRequired extends CredentialsSignin {
+  code = "mfa_required";
+}
+class MfaInvalid extends CredentialsSignin {
+  code = "mfa_invalid";
+}
 
 const credentialsSchema = z.object({
   clinicCode: z.string().trim().min(1).max(40),
   email: z.string().trim().min(1).max(255),
   password: z.string().min(1).max(200),
+  code: z.string().trim().max(20).optional(),
 });
 
 export const {
@@ -60,7 +67,7 @@ export const {
   providers: [
     Credentials({
       id: "clinic",
-      credentials: { clinicCode: {}, email: {}, password: {} },
+      credentials: { clinicCode: {}, email: {}, password: {}, code: {} },
       async authorize(raw, request) {
         const parsed = credentialsSchema.safeParse(raw);
         if (!parsed.success) return null;
@@ -70,6 +77,8 @@ export const {
           if (result.reason === "rate_limited") throw new RateLimited();
           if (result.reason === "clinic_suspended") throw new ClinicSuspended();
           if (result.reason === "account_disabled") throw new AccountDisabled();
+          if (result.reason === "mfa_required") throw new MfaRequired();
+          if (result.reason === "mfa_invalid") throw new MfaInvalid();
           return null;
         }
 

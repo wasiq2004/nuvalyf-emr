@@ -15,6 +15,7 @@ export async function listOperators(db: Queryable) {
       role: operators.role,
       status: operators.status,
       lastLoginAt: operators.lastLoginAt,
+      mfaEnabledAt: operators.mfaEnabledAt,
       createdAt: operators.createdAt,
     })
     .from(operators)

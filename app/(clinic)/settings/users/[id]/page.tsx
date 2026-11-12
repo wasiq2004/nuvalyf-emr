@@ -9,7 +9,7 @@ import { withClinic } from "@/lib/db";
 import { getStaff } from "@/features/staff/staff.service";
 import { listRoles } from "@/features/staff/roles.service";
 import { formatDateTime, formatRelative } from "@/lib/format";
-import { ReissuePasswordDialog } from "../StaffDialogs";
+import { ReissuePasswordDialog, ResetTwoStepButton } from "../StaffDialogs";
 import { EditStaffForm, StaffStatusButton } from "./StaffControls";
 
 export const metadata = { title: "Staff member" };
@@ -65,6 +65,15 @@ export default async function StaffDetailPage({ params }: { params: Promise<{ id
             { label: "Last sign-in", value: formatRelative(member.lastLoginAt) },
             { label: "Created", value: formatDateTime(member.createdAt, ctx.timezone) },
             { label: "Password", value: member.mustChangePassword ? "One-time password not yet changed" : "Set by the user" },
+            {
+              label: "Two-step sign-in",
+              value: (
+                <span className="flex flex-wrap items-center gap-2">
+                  {member.mfaEnabled ? "On" : member.roles.some((r) => r.key === "clinic_admin") ? "Required, not set up yet" : "Off"}
+                  {member.mfaEnabled && !isSelf && <ResetTwoStepButton id={member.id} name={fullName} />}
+                </span>
+              ),
+            },
           ]}
         />
       </Panel>

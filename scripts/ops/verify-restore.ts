@@ -7,6 +7,7 @@
 // for the app-role check. Exits non-zero on any mismatch.
 import dotenv from "dotenv";
 import postgres from "postgres";
+import { databaseSsl } from "../../lib/db/ssl";
 
 dotenv.config({ path: [".env.local", ".env"], quiet: true });
 
@@ -44,8 +45,8 @@ async function tableCounts(sql: postgres.Sql) {
 }
 
 async function main() {
-  const src = postgres(urlFor(ownerBase, source), { max: 1, onnotice: () => {} });
-  const dst = postgres(urlFor(ownerBase, restored), { max: 1, onnotice: () => {} });
+  const src = postgres(urlFor(ownerBase, source), { max: 1, onnotice: () => {}, ssl: databaseSsl(ownerBase) });
+  const dst = postgres(urlFor(ownerBase, restored), { max: 1, onnotice: () => {}, ssl: databaseSsl(ownerBase) });
   try {
     console.log(`Comparing ${restored} with ${source}`);
 
@@ -88,7 +89,7 @@ async function main() {
     }
 
     // The app role sees nothing without a clinic context: isolation intact.
-    const app = postgres(urlFor(process.env.DATABASE_URL!, restored), { max: 1, onnotice: () => {} });
+    const app = postgres(urlFor(process.env.DATABASE_URL!, restored), { max: 1, onnotice: () => {}, ssl: databaseSsl(process.env.DATABASE_URL) });
     try {
       const [visible] = await app`select count(*)::int as n from app.patients`;
       if (visible.n === 0) ok("app role sees no patient rows without a clinic context");

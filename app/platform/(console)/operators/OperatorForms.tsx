@@ -8,9 +8,11 @@ import { FormDialog, OneTimeSecret } from "@/components/app/dialogs";
 import { buttonClass } from "@/components/app/buttons";
 import {
   createOperatorAction,
+  resetOperatorMfaAction,
   resetOperatorPasswordAction,
   updateOperatorAction,
 } from "@/features/platform/platform.actions";
+import { ConfirmAction } from "@/components/app/dialogs";
 
 const ROLE_OPTIONS = [
   { value: "operator", label: "Operator: onboard, plans, suspend" },
@@ -107,6 +109,21 @@ export function EditOperatorDialog({
         </ActionForm>
       )}
     </FormDialog>
+  );
+}
+
+export function ResetOperatorTwoStepButton({ id, email }: { id: string; email: string }) {
+  return (
+    <ConfirmAction
+      action={resetOperatorMfaAction}
+      input={{ id }}
+      trigger="Reset two-step"
+      title={`Reset two-step sign-in for ${email}?`}
+      description="For a lost phone. Their sessions end and they set it up again at their next sign-in. This is audited."
+      confirmLabel="Reset"
+      successMessage="Two-step sign-in reset"
+      destructive
+    />
   );
 }
 

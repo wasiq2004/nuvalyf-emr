@@ -183,6 +183,13 @@
       "when": 1793966861205,
       "tag": "0025_stock_migration",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794210770829,
+      "tag": "0026_two_step_sign_in",
+      "breakpoints": true
     }
   ]
 }

@@ -80,4 +80,5 @@ export const PLATFORM_NAV: NavItem[] = [
   { label: "Plans", href: "/platform/plans", icon: "layers" },
   { label: "Operators", href: "/platform/operators", icon: "staff" },
   { label: "My password", href: "/platform/account/password", icon: "key", section: "Account" },
+  { label: "Two-step sign-in", href: "/platform/account/two-step", icon: "key", section: "Account" },
 ];

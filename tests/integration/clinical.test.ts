@@ -1,5 +1,6 @@
 // Phase 4: triage, consultation, prescribing, signing, immutability, lab,
 // and the clinic-owned catalogues.
+import { decryptText } from "@/lib/crypto-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq, sql } from "drizzle-orm";
 import { PDFDocument } from "pdf-lib";
@@ -218,7 +219,10 @@ describe("nurse updates for the doctor", () => {
     await asDoctor()((tx) => saveNotes(tx, encounterId, { chiefComplaint: "Cough", history: "Three days", plan: "Rest" }, doctorId));
     await asNurse()((tx) => saveTriageNotes(tx, encounterId, { chiefComplaint: "Dry cough", nursingNotes: "Afebrile" }, nurseId));
     const [row] = await owner`select chief_complaint, history, plan, nursing_notes from app.encounters where id = ${encounterId}`;
-    expect(row).toEqual({ chief_complaint: "Dry cough", history: "Three days", plan: "Rest", nursing_notes: "Afebrile" });
+    // Stored encrypted; read back through the key, the doctor's words are untouched.
+    expect(Object.values(row).every((v) => String(v).startsWith("v2:"))).toBe(true);
+    const plain = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, decryptText(String(v), `encounters.${k}`)]));
+    expect(plain).toEqual({ chief_complaint: "Dry cough", history: "Three days", plan: "Rest", nursing_notes: "Afebrile" });
     // Writing the doctor's notes and prescribing stay refused for a nurse at the action layer.
     const nurse: readonly string[] = SYSTEM_ROLES.nurse.permissions;
     for (const denied of ["encounter:write", "prescription:sign", "patient:write"]) expect(nurse).not.toContain(denied);

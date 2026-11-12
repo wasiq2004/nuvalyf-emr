@@ -1,6 +1,7 @@
 // Shared helpers for integration tests: a dedicated throwaway database.
 import dotenv from "dotenv";
 import postgres from "postgres";
+import { databaseSsl } from "@/lib/db/ssl";
 
 dotenv.config({ path: [".env.local", ".env"], quiet: true });
 
@@ -34,7 +35,7 @@ export function testUrls() {
 }
 
 export function connect(url: string) {
-  return postgres(url, { max: 1, onnotice: () => {} });
+  return postgres(url, { max: 1, onnotice: () => {}, ssl: databaseSsl(url) });
 }
 
 /** Owner connection for seeding fixtures (bypasses RLS as table owner). */

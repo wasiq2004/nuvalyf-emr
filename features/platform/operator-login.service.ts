@@ -7,16 +7,18 @@ import { recordPlatformAudit } from "@/lib/audit";
 import { burnPasswordCheck, verifyPassword } from "@/lib/auth/passwords";
 import { rateLimit } from "@/lib/rate-limit";
 import type { RequestMeta } from "@/lib/request";
+import { checkSecondFactor } from "@/features/auth/mfa";
 
 export type OperatorLoginResult =
   | { ok: true; operator: { id: string; sessionVersion: number; email: string; name: string } }
-  | { ok: false; reason: "invalid" | "rate_limited" | "account_disabled" };
+  | { ok: false; reason: "invalid" | "rate_limited" | "account_disabled" | "mfa_required" | "mfa_invalid" };
 
 const WINDOW = 15 * 60 * 1000;
 
 export async function verifyOperatorLogin(input: {
   email: string;
   password: string;
+  code?: string;
   meta: RequestMeta;
 }): Promise<OperatorLoginResult> {
   const email = input.email.trim().toLowerCase();
@@ -55,6 +57,19 @@ export async function verifyOperatorLogin(input: {
         meta: input.meta,
       });
       return { ok: false, reason: "account_disabled" } as const;
+    }
+
+    if (operator.mfaEnabledAt) {
+      if (!input.code?.trim()) return { ok: false, reason: "mfa_required" } as const;
+      const factor = checkSecondFactor(operator, input.code, new Date());
+      if (!factor.ok) {
+        await recordPlatformAudit(db, { operatorId: operator.id, action: "OPERATOR_LOGIN_FAILED", outcome: "denied", details: { email, step: "two-step code" }, meta: input.meta });
+        return { ok: false, reason: "mfa_invalid" } as const;
+      }
+      await db.update(operators).set(factor.update).where(eq(operators.id, operator.id));
+      if (factor.method === "recovery") {
+        await recordPlatformAudit(db, { operatorId: operator.id, action: "MFA_RECOVERY_CODE_USED", details: { left: factor.recoveryLeft }, meta: input.meta });
+      }
     }
 
     await db.update(operators).set({ lastLoginAt: new Date() }).where(eq(operators.id, operator.id));

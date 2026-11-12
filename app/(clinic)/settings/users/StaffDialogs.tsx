@@ -4,9 +4,9 @@ import { useState } from "react";
 import { KeyRound, UserPlus } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ActionForm, SubmitButton } from "@/components/app/form";
-import { OneTimeSecret } from "@/components/app/dialogs";
+import { ConfirmAction, OneTimeSecret } from "@/components/app/dialogs";
 import { buttonClass } from "@/components/app/buttons";
-import { createStaffAction, reissuePasswordAction } from "@/features/staff/staff.actions";
+import { createStaffAction, reissuePasswordAction, resetStaffMfaAction } from "@/features/staff/staff.actions";
 import { EMPTY_STAFF, StaffForm, type RoleOption } from "./StaffForm";
 
 export function CreateStaffDialog({ roleOptions, clinicCode }: { roleOptions: RoleOption[]; clinicCode: string }) {
@@ -56,6 +56,22 @@ export function CreateStaffDialog({ roleOptions, clinicCode }: { roleOptions: Ro
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A lost phone: clears two-step sign-in and ends their sessions. */
+export function ResetTwoStepButton({ id, name }: { id: string; name: string }) {
+  return (
+    <ConfirmAction
+      action={resetStaffMfaAction}
+      input={{ id }}
+      trigger="Reset"
+      title={`Reset two-step sign-in for ${name}?`}
+      description="Use this when they have lost their phone. Their sessions end, and they set it up again at their next sign-in. This is audited."
+      confirmLabel="Reset"
+      successMessage="Two-step sign-in reset"
+      destructive
+    />
   );
 }
 

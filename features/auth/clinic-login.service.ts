@@ -7,10 +7,11 @@ import { recordAudit } from "@/lib/audit";
 import { burnPasswordCheck, verifyPassword } from "@/lib/auth/passwords";
 import { rateLimit } from "@/lib/rate-limit";
 import type { RequestMeta } from "@/lib/request";
+import { checkSecondFactor } from "./mfa";
 
 export type ClinicLoginResult =
   | { ok: true; user: { id: string; clinicId: string; sessionVersion: number; email: string; name: string } }
-  | { ok: false; reason: "invalid" | "rate_limited" | "clinic_suspended" | "account_disabled" };
+  | { ok: false; reason: "invalid" | "rate_limited" | "clinic_suspended" | "account_disabled" | "mfa_required" | "mfa_invalid" };
 
 const WINDOW = 15 * 60 * 1000;
 
@@ -18,6 +19,8 @@ export async function verifyClinicLogin(input: {
   clinicCode: string;
   email: string;
   password: string;
+  /** The authenticator or recovery code, once the password has been accepted. */
+  code?: string;
   meta: RequestMeta;
 }): Promise<ClinicLoginResult> {
   const clinicCode = input.clinicCode.trim().toLowerCase();
@@ -84,6 +87,30 @@ export async function verifyClinicLogin(input: {
         meta: input.meta,
       });
       return { ok: false, reason: refusal } as const;
+    }
+
+    // Two-step sign-in: the password alone is not enough.
+    if (user.mfaEnabledAt) {
+      if (!input.code?.trim()) return { ok: false, reason: "mfa_required" } as const;
+      const factor = checkSecondFactor(user, input.code, new Date());
+      if (!factor.ok) {
+        await recordAudit(tx, {
+          clinicId: clinic.id,
+          actorUserId: user.id,
+          action: "LOGIN_FAILED",
+          targetType: "user",
+          targetId: user.id,
+          outcome: "denied",
+          severity: "warning",
+          details: { email, step: "two-step code" },
+          meta: input.meta,
+        });
+        return { ok: false, reason: "mfa_invalid" } as const;
+      }
+      await tx.update(users).set(factor.update).where(eq(users.id, user.id));
+      if (factor.method === "recovery") {
+        await recordAudit(tx, { clinicId: clinic.id, actorUserId: user.id, action: "MFA_RECOVERY_CODE_USED", targetType: "user", targetId: user.id, severity: "warning", details: { left: factor.recoveryLeft }, meta: input.meta });
+      }
     }
 
     await tx.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));

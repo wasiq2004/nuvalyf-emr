@@ -7,6 +7,8 @@
 // safe to run several replicas. Uses the app role: row-level security applies.
 import dotenv from "dotenv";
 import postgres from "postgres";
+import { databaseSsl } from "../lib/db/ssl";
+import { assertKeyring } from "../lib/keyring";
 
 dotenv.config({ path: [".env.local", ".env"], quiet: true });
 
@@ -18,9 +20,12 @@ async function main() {
   const once = process.argv.includes("--once");
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set");
+  // The same checks as the web server: no key or no TLS, no start.
+  assertKeyring();
+  databaseSsl(url);
 
   // A dedicated connection holds the lock for as long as this process lives.
-  const lockConnection = postgres(url, { max: 1, onnotice: () => {} });
+  const lockConnection = postgres(url, { max: 1, onnotice: () => {}, ssl: databaseSsl(url) });
   let leader = false;
   let stopping = false;
   const stop = async () => {

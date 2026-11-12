@@ -6,6 +6,7 @@ import { clinicSettings, clinics, planModules, rolePermissions, roles, userRoles
 import { MODULES, isModuleKey, type ModuleKey } from "@/lib/access/modules";
 import { resolvePermissions, type Permission } from "@/lib/access/permissions";
 import { homeForRoles } from "@/lib/access/roles";
+import { clinicMfaRequired } from "./mfa";
 
 export type ClinicContext = {
   clinicId: string;
@@ -20,6 +21,10 @@ export type ClinicContext = {
   title: string | null;
   registrationNumber: string | null;
   mustChangePassword: boolean;
+  /** Two-step sign-in is on for this account. */
+  mfaEnabled: boolean;
+  /** Required for the role and not set up yet: nothing else opens until it is. */
+  mustEnrollMfa: boolean;
   roleKeys: string[];
   roleNames: string[];
   permissions: ReadonlySet<Permission>;
@@ -49,7 +54,23 @@ export async function loadClinicContext(
     if (!clinic) return { status: "signed_out" } as const;
     if (clinic.status !== "active") return { status: "suspended" } as const;
 
-    const [user] = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+    // Named columns: every request reads this, and none of it needs the two-step secret.
+    const [user] = await tx
+      .select({
+        id: users.id,
+        email: users.email,
+        status: users.status,
+        sessionVersion: users.sessionVersion,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        title: users.title,
+        registrationNumber: users.registrationNumber,
+        mustChangePassword: users.mustChangePassword,
+        mfaEnabledAt: users.mfaEnabledAt,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     if (!user) return { status: "signed_out" } as const;
     if (user.status !== "active") return { status: "disabled" } as const;
     if (user.sessionVersion !== sessionVersion) return { status: "expired" } as const;
@@ -97,6 +118,8 @@ export async function loadClinicContext(
         title: user.title,
         registrationNumber: user.registrationNumber,
         mustChangePassword: user.mustChangePassword,
+        mfaEnabled: Boolean(user.mfaEnabledAt),
+        mustEnrollMfa: clinicMfaRequired(roleKeys) && !user.mfaEnabledAt,
         roleKeys,
         roleNames,
         permissions,

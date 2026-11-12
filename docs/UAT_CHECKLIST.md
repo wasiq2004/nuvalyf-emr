@@ -125,6 +125,21 @@ User acceptance testing with the pilot clinic, run on the staging server with re
 | 7.14 | Counter sale of whole strips and loose tablets in one sale: strip at its MRP, tablets at the tablet price; stock falls by the right number of tablets | ✓ | | |
 | 7.15 | A strip cannot be dispensed against a course shorter than the strip; loose tablets can | ✓ | | |
 
+## 1a. Security for licensing
+
+| # | Check | Tested | Pass | Notes |
+|---|---|---|---|---|
+| 1a.1 | A Clinic Admin cannot open anything until two-step sign-in is set up | ✓ | | |
+| 1a.2 | Signing in asks for the code after the password; a wrong or reused code is refused | ✓ | | |
+| 1a.3 | A recovery code works once | ✓ | | |
+| 1a.4 | Another administrator resets a lost phone; the person sets it up again | ✓ | | |
+| 1a.5 | On the server: `backup.sh` refuses to run without the public key, and its file cannot be opened without the private key | ✓ | | |
+| 1a.6 | On the server: a backup is restored with the private key and `ops:verify-restore` passes | | | |
+| 1a.7 | On the server: the database refuses a connection without TLS | | | |
+| 1a.8 | On the server: `lsblk` or the provider shows the data disk encrypted | | | |
+| 1a.9 | On the server: `check-log-retention.sh` passes | | | |
+| 1a.10 | `ops:rotate-key -- --check` reports 0 everywhere | ✓ | | |
+
 ## 7c. Moving from the old software
 
 | # | Check | Tested | Pass | Notes |

@@ -1,6 +1,7 @@
 import { boolean, check, index, integer, jsonb, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, id, platformSchema, updatedAt } from "./_shared";
+import { encryptedText } from "./_encrypted";
 
 export const plans = platformSchema.table(
   "plans",
@@ -63,6 +64,15 @@ export const operators = platformSchema.table(
     mustChangePassword: boolean("must_change_password").notNull().default(true),
     sessionVersion: integer("session_version").notNull().default(1),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    /** Two-step sign-in (TOTP). The secrets are encrypted in the application. */
+    mfaSecret: encryptedText("operators", "mfa_secret"),
+    /** Set while the person is adding the account to their authenticator app. */
+    mfaPendingSecret: encryptedText("operators", "mfa_pending_secret"),
+    mfaEnabledAt: timestamp("mfa_enabled_at", { withTimezone: true }),
+    /** The last time step accepted: a code cannot be used twice. */
+    mfaLastStep: integer("mfa_last_step"),
+    /** SHA-256 of each unused recovery code. */
+    mfaRecoveryHashes: jsonb("mfa_recovery_hashes").$type<string[]>().notNull().default([]),
     createdBy: uuid("created_by"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

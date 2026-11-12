@@ -55,7 +55,14 @@ type PageRequirement = {
   module?: ModuleKey;
   /** The change-password page must stay reachable while a change is pending. */
   allowPendingPasswordChange?: boolean;
+  /** The two-step setup page must stay reachable while setup is pending. */
+  allowPendingMfa?: boolean;
 };
+
+/** A new password or two-step setup is still owed: files and exports stay shut. */
+export function setupPending(ctx: ClinicContext): boolean {
+  return ctx.mustChangePassword || ctx.mustEnrollMfa;
+}
 
 /**
  * Page guard for the clinic and compliance panels. Redirects signed-out users,
@@ -71,6 +78,9 @@ export async function requireClinic(requirement: PageRequirement = {}): Promise<
   const { ctx } = state;
   if (ctx.mustChangePassword && !requirement.allowPendingPasswordChange) {
     redirect("/change-password");
+  }
+  if (ctx.mustEnrollMfa && !requirement.allowPendingMfa && !requirement.allowPendingPasswordChange) {
+    redirect("/two-step");
   }
 
   if (requirement.module && !hasModule(ctx, requirement.module)) {

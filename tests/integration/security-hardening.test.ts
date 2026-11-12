@@ -1,4 +1,5 @@
 // Phase 10 security fixes, against the database.
+import { decryptText } from "@/lib/crypto-core";
 import { randomUUID } from "crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
@@ -68,7 +69,8 @@ describe("a consultation belongs to its doctor", () => {
     await expect(as(drB)((tx) => finalizeEncounter(tx, encounterId, drB, today))).rejects.toThrow(/another doctor/);
     await expect(as(drB)((tx) => cancelLabOrder(tx, order.id, drB))).rejects.toThrow(/ordering doctor/);
     const [notes] = await owner`select chief_complaint from app.encounters where id = ${encounterId}`;
-    expect(notes.chief_complaint).toBe("Cough");
+    expect(notes.chief_complaint).not.toContain("Cough");
+    expect(decryptText(notes.chief_complaint, "encounters.chief_complaint")).toBe("Cough");
 
     const taken = await as(drB)((tx) => takeOverEncounter(tx, encounterId, drB));
     expect(taken).toMatchObject({ changed: true, previousDoctorId: drA });

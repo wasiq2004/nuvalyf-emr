@@ -46,6 +46,8 @@ type ClinicActionConfig<S extends z.ZodType> = {
   module?: ModuleKey;
   schema: S;
   allowPendingPasswordChange?: boolean;
+  /** Two-step setup itself must work while setup is pending. */
+  allowPendingMfa?: boolean;
 };
 
 export type ActionMeta = {
@@ -67,6 +69,9 @@ export function clinicAction<S extends z.ZodType, R>(
 
     if (session.mustChangePassword && !config.allowPendingPasswordChange) {
       return fail("Please change your password before continuing.");
+    }
+    if (session.mustEnrollMfa && !config.allowPendingMfa && !config.allowPendingPasswordChange) {
+      return fail("Set up two-step sign-in before continuing.");
     }
     if (config.module && !session.modules.has(config.module)) {
       return fail("This feature is not included in your clinic's plan.");
@@ -121,6 +126,7 @@ type PlatformActionConfig<S extends z.ZodType> = {
   role?: OperatorRole;
   schema: S;
   allowPendingPasswordChange?: boolean;
+  allowPendingMfa?: boolean;
 };
 
 export function platformAction<S extends z.ZodType, R>(
@@ -135,6 +141,9 @@ export function platformAction<S extends z.ZodType, R>(
 
     if (operator.mustChangePassword && !config.allowPendingPasswordChange) {
       return fail("Please change your password before continuing.");
+    }
+    if (operator.mustEnrollMfa && !config.allowPendingMfa && !config.allowPendingPasswordChange) {
+      return fail("Set up two-step sign-in before continuing.");
     }
     if (config.role === "platform_admin" && operator.role !== "platform_admin") {
       await withPlatform((db) =>

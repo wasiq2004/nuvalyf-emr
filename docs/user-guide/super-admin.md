@@ -9,7 +9,7 @@ There are two console roles:
 
 ## Signing in
 
-Open `/platform/login` (**Operator sign-in**), enter your **Email** and **Password** and click **Sign in to console**. Console sessions last one hour from sign-in. Change your password under **My password** (at least 12 characters).
+Open `/platform/login` (**Operator sign-in**), enter your **Email** and **Password** and click **Sign in to console**, then the 6-digit code from your authenticator app. Every operator must use two-step sign-in: you set it up the first time you sign in (see [Two-step sign-in](README.md#two-step-sign-in)). Console sessions last one hour from sign-in. Change your password under **My password** (at least 12 characters).
 
 ## The estate
 
@@ -39,12 +39,13 @@ Open the clinic from **Clinics** and click **Suspend clinic**. Enter a **Reason*
 
 ## Rescuing a clinic administrator (Platform Admin)
 
-If a clinic's only administrator is locked out, open the clinic. Under **Clinic administrators**, click **Rescue** next to their email, then **Issue new password**. Give them the one-time password securely. The rescue is recorded in the console's audit log.
+If a clinic's only administrator is locked out, open the clinic. Under **Clinic administrators**, click **Rescue** next to their email, then **Issue new password**. Give them the one-time password securely. Rescue also clears their two-step sign-in, since a locked-out administrator has usually lost the phone too; they set it up again. The rescue is recorded in the console's audit log.
 
 ## Operators (Platform Admin)
 
 - **Add operator:** enter the name, email and role, then **Create operator**. Pass on the one-time password.
 - **Edit:** change their role, or set the status to **Disabled** to remove access.
 - **New password:** issues a fresh one-time password.
+- **Reset two-step:** for an operator who has lost their phone. Their sessions end and they set it up again.
 
-You cannot disable yourself or remove the last active Platform Admin.
+You cannot disable yourself or remove the last active Platform Admin. If the only Platform Admin loses both the phone and the recovery codes, someone with server access runs `npm run db:reset-operator-mfa -- <email>` (recorded in the console's audit log).

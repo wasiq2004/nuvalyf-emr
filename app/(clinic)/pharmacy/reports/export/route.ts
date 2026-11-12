@@ -1,7 +1,7 @@
 // GET /pharmacy/reports/export?view=&section=&from=&to=&month= -> one report
 // section as CSV, exactly as on screen. The export is audited; the Schedule
 // register names patients, so it is recorded as a warning.
-import { can, getClinicSession, hasModule, recordDenied } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, recordDenied, setupPending } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "pharmacy")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "pharmacy")) return new Response("Not allowed.", { status: 403 });
   if (!can(ctx, "pharmacy:reports")) {
     await recordDenied(ctx, "PAGE_ACCESS_DENIED", { required: "pharmacy:reports", path: "/pharmacy/reports/export" });
     return new Response("Not allowed.", { status: 403 });

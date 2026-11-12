@@ -30,13 +30,33 @@ export type StaffListItem = {
   registrationCouncil: string | null;
   status: string;
   mustChangePassword: boolean;
+  mfaEnabled: boolean;
   lastLoginAt: Date | null;
   createdAt: Date;
   roles: { key: string; name: string }[];
 };
 
 export async function listStaff(tx: Tx): Promise<StaffListItem[]> {
-  const rows = await tx.select().from(users).orderBy(asc(users.firstName), asc(users.lastName));
+  // Named columns: the two-step secrets are never read (or decrypted) for a list.
+  const rows = await tx
+    .select({
+      id: users.id,
+      email: users.email,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      title: users.title,
+      phone: users.phone,
+      specialty: users.specialty,
+      registrationNumber: users.registrationNumber,
+      registrationCouncil: users.registrationCouncil,
+      status: users.status,
+      mustChangePassword: users.mustChangePassword,
+      mfaEnabledAt: users.mfaEnabledAt,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .orderBy(asc(users.firstName), asc(users.lastName));
   const grants = await tx
     .select({ userId: userRoles.userId, key: roles.key, name: roles.name })
     .from(userRoles)
@@ -54,6 +74,7 @@ export async function listStaff(tx: Tx): Promise<StaffListItem[]> {
     registrationCouncil: u.registrationCouncil,
     status: u.status,
     mustChangePassword: u.mustChangePassword,
+    mfaEnabled: Boolean(u.mfaEnabledAt),
     lastLoginAt: u.lastLoginAt,
     createdAt: u.createdAt,
     roles: grants.filter((g) => g.userId === u.id).map(({ key, name }) => ({ key, name })),

@@ -9,7 +9,7 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
+/docs
 # testing
 /coverage
 
@@ -44,3 +44,7 @@ next-env.d.ts
 # playwright
 /test-results/
 /playwright-report/
+
+# database TLS certificates and keys (scripts/ops/make-db-certs.sh)
+/certs/
+docs/NuvaLyf Data Security.html

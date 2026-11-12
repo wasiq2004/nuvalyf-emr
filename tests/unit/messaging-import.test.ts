@@ -90,11 +90,11 @@ describe("secrets at rest", () => {
     expect(isEncryptionConfigured()).toBe(true);
     const stored = encryptSecret("EAAG-secret-token");
     expect(stored).not.toContain("secret");
-    expect(stored.startsWith("v1:")).toBe(true);
+    expect(stored.startsWith("v2:")).toBe(true); // with the id of the key that encrypted it
     expect(encryptSecret("EAAG-secret-token")).not.toBe(stored); // fresh IV each time
     expect(decryptSecret(stored)).toBe("EAAG-secret-token");
     const parts = stored.split(":");
-    parts[3] = Buffer.from("tampered").toString("base64");
+    parts[4] = Buffer.from("tampered").toString("base64");
     expect(() => decryptSecret(parts.join(":"))).toThrow();
   });
 });

@@ -1,6 +1,6 @@
 // GET /pharmacy/returns/:id/pdf -> the credit note.
 import { z } from "zod";
-import { can, getClinicSession, hasModule } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, setupPending } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { getSaleReturn } from "@/features/pharmacy/returns.service";
 import { pdfResponse, pharmacyPdfContext } from "@/features/pharmacy/pdf-context";
@@ -10,7 +10,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "pharmacy") || !(can(ctx, "pharmacy:sell") || can(ctx, "pharmacy:dispense") || can(ctx, "pharmacy:return"))) {
+  if (setupPending(ctx) || !hasModule(ctx, "pharmacy") || !(can(ctx, "pharmacy:sell") || can(ctx, "pharmacy:dispense") || can(ctx, "pharmacy:return"))) {
     return new Response("Not allowed.", { status: 403 });
   }
   const { id } = await params;

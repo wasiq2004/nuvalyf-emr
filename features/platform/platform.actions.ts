@@ -27,6 +27,7 @@ import {
   timezoneField,
 } from "@/lib/validation";
 import { onboardClinic, rescueClinicAdmin } from "./onboarding.service";
+import { beginOperatorMfaSetup, finishOperatorMfaSetup, newOperatorRecoveryCodes, resetOperatorMfa } from "./operator-mfa.service";
 import { setClinicPlan, setClinicStatus, updateClinicContact } from "./clinics.service";
 import { createPlan, updatePlan } from "./plans.service";
 import {
@@ -56,6 +57,8 @@ export async function operatorSignInAction(formData: FormData): Promise<ActionRe
     await platformSignIn("operator", { ...parsed.data, redirect: false });
   } catch (error) {
     if (error instanceof CredentialsSignin) {
+      if (error.code === "mfa_required") return fail("Enter the 6-digit code from your authenticator app.", { code: "Enter the 6-digit code from your authenticator app." });
+      if (error.code === "mfa_invalid") return fail("That code is not right. Enter the newest code, or one of your recovery codes.", { code: "That code is not right." });
       if (error.code === "rate_limited") return fail("Too many attempts. Wait 15 minutes and try again.");
       if (error.code === "account_disabled") return fail("This operator account is disabled.");
       return fail("Incorrect email or password.");
@@ -285,6 +288,43 @@ export const updateOperatorAction = platformAction(
       await audit(d, { action: "OPERATOR_UPDATED", targetType: "operator", targetId: input.id, details: input });
     });
   },
+);
+
+const codeField = z.object({ code: z.string({ message: "Enter the code" }).trim().min(6, "Enter the 6-digit code").max(20) });
+
+export const beginOperatorMfaSetupAction = platformAction(
+  { name: "platform.beginTwoStep", schema: z.object({}), allowPendingMfa: true },
+  async ({ operator, db }) => db((d) => beginOperatorMfaSetup(d, operator.id)),
+);
+
+export const finishOperatorMfaSetupAction = platformAction(
+  { name: "platform.finishTwoStep", schema: codeField, allowPendingMfa: true },
+  async ({ operator, db, audit }, input) =>
+    db(async (d) => {
+      const result = await finishOperatorMfaSetup(d, operator.id, input.code);
+      await audit(d, { action: "MFA_ENABLED", targetType: "operator", targetId: operator.id });
+      return result;
+    }),
+);
+
+export const newOperatorRecoveryCodesAction = platformAction(
+  { name: "platform.newRecoveryCodes", schema: codeField },
+  async ({ operator, db, audit }, input) =>
+    db(async (d) => {
+      const result = await newOperatorRecoveryCodes(d, operator.id, input.code);
+      await audit(d, { action: "MFA_RECOVERY_CODES_RENEWED", targetType: "operator", targetId: operator.id });
+      return result;
+    }),
+);
+
+export const resetOperatorMfaAction = platformAction(
+  { name: "platform.resetOperatorTwoStep", role: "platform_admin", schema: z.object({ id: idField }) },
+  async ({ operator, db, audit }, input) =>
+    db(async (d) => {
+      const result = await resetOperatorMfa(d, input.id, operator.id);
+      await audit(d, { action: "OPERATOR_MFA_RESET", targetType: "operator", targetId: input.id, details: { email: result.email } });
+      return result;
+    }),
 );
 
 export const resetOperatorPasswordAction = platformAction(

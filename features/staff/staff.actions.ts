@@ -4,6 +4,7 @@ import { z } from "zod";
 import { clinicAction } from "@/lib/auth/actions";
 import { checkbox, emailField, idField, nameField, optionalPhone, optionalText, stringList } from "@/lib/validation";
 import { createStaff, reissuePassword, setStaffStatus, updateStaff } from "./staff.service";
+import { resetStaffMfa } from "@/features/auth/mfa.service";
 import { resetRoleToDefaults, setRolePermission } from "./roles.service";
 
 const staffSchema = z.object({
@@ -68,6 +69,17 @@ export const setStaffStatusAction = clinicAction(
         targetId: input.id,
         severity: "warning",
       });
+    }),
+);
+
+/** A lost phone. Audited; the person sets two-step sign-in up again. */
+export const resetStaffMfaAction = clinicAction(
+  { name: "staff.resetTwoStep", permission: "staff:manage", schema: z.object({ id: idField }) },
+  async ({ session, db, audit }, input) =>
+    db(async (tx) => {
+      const result = await resetStaffMfa(tx, input.id, session.userId);
+      await audit(tx, { action: "MFA_RESET", targetType: "user", targetId: input.id, severity: "warning", details: { email: result.email } });
+      return result;
     }),
 );
 

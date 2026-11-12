@@ -78,6 +78,9 @@ jobs:
       PLATFORM_ADMIN_EMAIL: admin@ci.test
       PLATFORM_ADMIN_PASSWORD: ci-e2e-admin-password
       DATA_ENCRYPTION_KEY: Y2ktZTJlLWVuY3J5cHRpb24ta2V5LTMyLWJ5dGVzISE=
+      # The CI database service has no TLS. Production refuses to start without
+      # DATABASE_SSL, so CI states its plain connection by name.
+      DATABASE_SSL: disable
       WHATSAPP_DRIVER: log
       E2E_BASE_URL: http://localhost:3000
 

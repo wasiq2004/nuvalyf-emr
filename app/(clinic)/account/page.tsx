@@ -1,4 +1,4 @@
-import { KeyRound, UserCircle } from "lucide-react";
+import { KeyRound, ShieldCheck, UserCircle } from "lucide-react";
 import { ButtonLink } from "@/components/app/buttons";
 import { DetailList, PageHeader, PageShell, Panel } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -45,6 +45,12 @@ export default async function AccountPage() {
               : []),
           ]}
         />
+      </Panel>
+
+      <Panel title="Two-step sign-in" description={ctx.mfaEnabled ? "On: signing in needs a code from your phone." : "Off. Turn it on so a stolen password alone cannot open your account."}>
+        <ButtonLink href="/two-step" variant="secondary">
+          <ShieldCheck className="h-4 w-4" /> {ctx.mfaEnabled ? "Manage" : "Turn on"}
+        </ButtonLink>
       </Panel>
 
       <Panel title="Password" description="Changing it signs you out on every other device.">

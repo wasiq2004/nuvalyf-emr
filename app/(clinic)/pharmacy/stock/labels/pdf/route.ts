@@ -1,6 +1,6 @@
 // GET /pharmacy/stock/labels/pdf?items=<id>.<copies>,... -> a sheet of shelf labels.
 import { z } from "zod";
-import { can, getClinicSession, hasModule } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, setupPending } from "@/lib/auth/clinic-session";
 import { withClinic } from "@/lib/db";
 import { formatMoney } from "@/lib/money";
 import { todayInTimeZone } from "@/lib/time";
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "pharmacy") || !can(ctx, "stock:manage")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "pharmacy") || !can(ctx, "stock:manage")) return new Response("Not allowed.", { status: 403 });
 
   const copies = new Map<string, number>();
   for (const part of (new URL(request.url).searchParams.get("items") ?? "").split(",").slice(0, MAX_ITEMS)) {

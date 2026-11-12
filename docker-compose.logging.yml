@@ -1,0 +1,23 @@
+# Log retention by time, for CERT-In's 180 days (docs/OPERATIONS.md, "Logs").
+#
+#   docker compose -f docker-compose.yml -f docker-compose.logging.yml up -d
+#
+# Sends every container's output to the host's journal (systemd-journald),
+# tagged nuvalyf-<service>, where retention is set in days, not megabytes.
+# Set it on the host in /etc/systemd/journald.conf (see the docs), then check
+# with scripts/ops/check-log-retention.sh. The default json-file logging in
+# docker-compose.yml is size-capped and cannot promise 180 days.
+x-journald: &journald
+  driver: journald
+  options:
+    tag: "nuvalyf-{{.Name}}"
+
+services:
+  db:
+    logging: *journald
+  setup:
+    logging: *journald
+  web:
+    logging: *journald
+  worker:
+    logging: *journald

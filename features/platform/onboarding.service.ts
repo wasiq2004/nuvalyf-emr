@@ -19,6 +19,7 @@ import { SYSTEM_ROLES, SYSTEM_ROLE_KEYS } from "@/lib/access/roles";
 import { AppError, isUniqueViolation } from "@/lib/errors";
 import { generateOneTimePassword, hashPassword } from "@/lib/auth/passwords";
 import type { RequestMeta } from "@/lib/request";
+import { MFA_OFF } from "@/features/auth/mfa";
 import { importStarterCatalog } from "@/lib/catalog/seed";
 
 export type OnboardClinicInput = {
@@ -187,6 +188,8 @@ export async function rescueClinicAdmin(
       passwordHash: await hashPassword(oneTimePassword),
       mustChangePassword: true,
       status: "active",
+      // A locked-out admin has usually lost the phone too: they set two-step up again.
+      ...MFA_OFF,
       sessionVersion: sql`${users.sessionVersion} + 1`,
       updatedAt: new Date(),
     })

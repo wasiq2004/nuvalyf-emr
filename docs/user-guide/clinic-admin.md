@@ -16,6 +16,8 @@ Work through these in order when your clinic is new:
 6. **Messaging** (if your plan includes WhatsApp): connect your WhatsApp Business number.
 7. **Import patients** if you are moving from another system.
 
+Your own account must use two-step sign-in (see [Signing in](README.md#two-step-sign-in)). If you lose your phone and recovery codes, another Clinic Admin can reset it; if you are the only one, the platform's Super Admin can rescue your account.
+
 ## Clinic settings
 
 **Clinic settings** has one form with a single **Save settings** button:
@@ -36,7 +38,7 @@ To add someone:
 3. For doctors, fill in **Doctor details**: specialty, **Medical registration number** and **Registration council**. Without a registration number a doctor cannot sign consultations.
 4. Click **Create account**, copy the one-time password and give it to them in person or securely. It is shown only once.
 
-Open a staff member to edit their profile and roles (**Save changes**), **Issue new password** if they forget theirs, or **Disable** their account when they leave. Disabling signs them out at once; their past work stays in the record. **Enable** restores access.
+Open a staff member to edit their profile and roles (**Save changes**), **Issue new password** if they forget theirs, **Reset** their two-step sign-in if they lose their phone, or **Disable** their account when they leave. Disabling signs them out at once; their past work stays in the record. **Enable** restores access.
 
 ## Roles & permissions
 

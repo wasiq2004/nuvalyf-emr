@@ -93,7 +93,7 @@ describe("consent", () => {
 
   it("stores the WhatsApp token encrypted", async () => {
     const [row] = await owner`select access_token_encrypted from app.whatsapp_config where clinic_id = ${clinic.clinicId}`;
-    expect(row.access_token_encrypted).toMatch(/^v1:/);
+    expect(row.access_token_encrypted).toMatch(/^v2:[0-9a-f]{8}:/);
     expect(row.access_token_encrypted).not.toContain("very-secret");
   });
 });

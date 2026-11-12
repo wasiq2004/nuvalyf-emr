@@ -18,10 +18,12 @@
     "db:reset": "tsx scripts/db/reset.ts",
     "db:bootstrap": "tsx scripts/db/bootstrap.ts",
     "db:create-platform-admin": "tsx scripts/db/create-platform-admin.ts",
+    "db:reset-operator-mfa": "tsx scripts/db/reset-operator-mfa.ts",
     "test:e2e": "playwright test",
     "worker": "tsx --conditions=react-server worker/index.ts",
     "load:clinic-day": "tsx --conditions=react-server scripts/load/clinic-day.ts",
-    "ops:verify-restore": "tsx scripts/ops/verify-restore.ts"
+    "ops:verify-restore": "tsx scripts/ops/verify-restore.ts",
+    "ops:rotate-key": "tsx --conditions=react-server scripts/ops/rotate-key.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.2",

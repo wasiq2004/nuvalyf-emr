@@ -7,6 +7,15 @@ x-app-url: &app-url postgres://medflow_app:${APP_DB_PASSWORD:?Set APP_DB_PASSWOR
 x-platform-url: &platform-url postgres://medflow_platform:${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
 x-provisioner-url: &provisioner-url postgres://medflow_provisioner:${PROVISIONER_DB_PASSWORD:?Set PROVISIONER_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-medflow}
 
+# Every connection to the database is TLS, and the app checks the database's
+# certificate against our own CA. Make the certificates once with
+# scripts/ops/make-db-certs.sh (docs/OPERATIONS.md, "Database TLS").
+x-db-tls: &db-tls
+  DATABASE_SSL: verify-full
+  DATABASE_SSL_CA: /certs/ca.crt
+
+x-ca-mount: &ca-mount ${DB_CERTS_DIR:-./certs}/ca.crt:/certs/ca.crt:ro
+
 # Container logs rotate at 20 MB x 10 files per service (~200 MB cap). Ship
 # them elsewhere for longer retention; see docs/OPERATIONS.md.
 x-logging: &logging
@@ -26,8 +35,34 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-medflow}
     # No host port: only the other services reach it. For local access, see
     # docker-compose.override.yml.
+    #
+    # TLS on, TLS 1.2 at least, and db/pg_hba.conf refuses any network
+    # connection without it. Postgres insists its key is private to it, so the
+    # mounted certificate is copied in and handed to the postgres user before
+    # the normal entrypoint starts.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        mkdir -p /var/lib/postgresql/tls &&
+        cp /certs/server.crt /certs/server.key /var/lib/postgresql/tls/ &&
+        chown -R postgres:postgres /var/lib/postgresql/tls &&
+        chmod 600 /var/lib/postgresql/tls/server.key &&
+        exec docker-entrypoint.sh postgres
+        -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/tls/server.crt
+        -c ssl_key_file=/var/lib/postgresql/tls/server.key
+        -c ssl_min_protocol_version=TLSv1.2
+        -c hba_file=/etc/postgresql/pg_hba.conf
+        -c log_connections=on
+        -c log_disconnections=on
+        -c log_timezone=Asia/Kolkata
+        -c "log_line_prefix=%m [%p] %q%u@%d from %h "
     volumes:
       - medflow_data:/var/lib/postgresql/data
+      - ${DB_CERTS_DIR:-./certs}/server.crt:/certs/server.crt:ro
+      - ${DB_CERTS_DIR:-./certs}/server.key:/certs/server.key:ro
+      - ./db/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     healthcheck:
       # Checks the server, not POSTGRES_DB: setup creates that database if it is missing.
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
@@ -45,12 +80,15 @@ services:
       target: tools
     restart: "no"
     environment:
+      <<: *db-tls
       DATABASE_OWNER_URL: *owner-url
       DATABASE_URL: *app-url
       PLATFORM_DATABASE_URL: *platform-url
       PROVISIONER_DATABASE_URL: *provisioner-url
       PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+    volumes:
+      - *ca-mount
     depends_on:
       db:
         condition: service_healthy
@@ -68,6 +106,7 @@ services:
     expose:
       - "3000"
     environment:
+      <<: *db-tls
       DATABASE_URL: *app-url
       PLATFORM_DATABASE_URL: *platform-url
       # Remove this line to switch off clinic onboarding and admin rescue.
@@ -78,9 +117,12 @@ services:
       AUTH_TRUST_HOST: "true"
       # Reverse proxies in front of the app (see docs/OPERATIONS.md).
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
-      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY in .env (openssl rand -base64 32)}
+      DATA_ENCRYPTION_KEYS_OLD: ${DATA_ENCRYPTION_KEYS_OLD:-}
       WHATSAPP_DRIVER: ${WHATSAPP_DRIVER:-cloud}
       DEFAULT_COUNTRY_CODE: ${DEFAULT_COUNTRY_CODE:-91}
+    volumes:
+      - *ca-mount
     depends_on:
       setup:
         condition: service_completed_successfully
@@ -94,10 +136,14 @@ services:
       target: worker
     restart: unless-stopped
     environment:
+      <<: *db-tls
       DATABASE_URL: *app-url
-      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY in .env (openssl rand -base64 32)}
+      DATA_ENCRYPTION_KEYS_OLD: ${DATA_ENCRYPTION_KEYS_OLD:-}
       WHATSAPP_DRIVER: ${WHATSAPP_DRIVER:-cloud}
       DEFAULT_COUNTRY_CODE: ${DEFAULT_COUNTRY_CODE:-91}
+    volumes:
+      - *ca-mount
     depends_on:
       setup:
         condition: service_completed_successfully

@@ -1,6 +1,6 @@
 // GET /lab/report/:encounterId -> the printable lab report for a consultation.
 import { z } from "zod";
-import { can, getClinicSession, hasModule, recordDenied } from "@/lib/auth/clinic-session";
+import { can, getClinicSession, hasModule, recordDenied, setupPending } from "@/lib/auth/clinic-session";
 import { recordAudit } from "@/lib/audit";
 import { withClinic } from "@/lib/db";
 import { getRequestMeta } from "@/lib/request";
@@ -16,7 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ enc
   const state = await getClinicSession();
   if (state.status !== "ok") return new Response("Sign in first.", { status: 401 });
   const ctx = state.ctx;
-  if (ctx.mustChangePassword || !hasModule(ctx, "lab")) return new Response("Not allowed.", { status: 403 });
+  if (setupPending(ctx) || !hasModule(ctx, "lab")) return new Response("Not allowed.", { status: 403 });
   if (!can(ctx, "lab:result") && !can(ctx, "encounter:read")) {
     await recordDenied(ctx, "PAGE_ACCESS_DENIED", { required: ["lab:result", "encounter:read"], path: "/lab/report/[encounterId]" });
     return new Response("Not allowed.", { status: 403 });

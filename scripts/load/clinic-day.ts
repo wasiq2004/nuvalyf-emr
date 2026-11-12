@@ -10,6 +10,7 @@
 // Prints p50 / p95 / max per step and overall throughput.
 import dotenv from "dotenv";
 import postgres from "postgres";
+import { databaseSsl } from "../../lib/db/ssl";
 
 dotenv.config({ path: [".env.local", ".env"], quiet: true });
 
@@ -48,7 +49,7 @@ function percentile(sorted: number[], p: number) {
 
 async function main() {
   const ownerBase = need("DATABASE_OWNER_URL");
-  const admin = postgres(withDatabase(ownerBase, "postgres"), { max: 1, onnotice: () => {} });
+  const admin = postgres(withDatabase(ownerBase, "postgres"), { max: 1, onnotice: () => {}, ssl: databaseSsl(ownerBase) });
   await admin.unsafe(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
   await admin.unsafe(`CREATE DATABASE ${DB}`);
   await admin.end();
@@ -60,7 +61,7 @@ async function main() {
   process.env.DATABASE_POOL_MAX = String(Math.max(10, CONCURRENCY + 6));
 
   const { ensureRoles, runMigrations } = await import("../db/tasks");
-  const owner = postgres(process.env.DATABASE_OWNER_URL, { max: 1, onnotice: () => {} });
+  const owner = postgres(process.env.DATABASE_OWNER_URL, { max: 1, onnotice: () => {}, ssl: databaseSsl(process.env.DATABASE_OWNER_URL) });
   await ensureRoles(owner);
   await runMigrations(owner);
 
