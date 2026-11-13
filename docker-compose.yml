@@ -39,11 +39,14 @@ services:
     # TLS on, TLS 1.2 at least, and db/pg_hba.conf refuses any network
     # connection without it. Postgres insists its key is private to it, so the
     # mounted certificate is copied in and handed to the postgres user before
-    # the normal entrypoint starts.
+    # the normal entrypoint starts. If the certificate files are missing, Docker
+    # mounts empty directories in their place, so check for real files first.
     entrypoint:
       - /bin/sh
       - -c
       - >-
+        { test -f /certs/server.crt && test -f /certs/server.key; } ||
+        { echo "NuvaLyf database: TLS certificates not found. Run scripts/ops/make-db-certs.sh on the server and set DB_CERTS_DIR to that folder (docs/OPERATIONS.md, Database TLS)." >&2; exit 1; } &&
         mkdir -p /var/lib/postgresql/tls &&
         cp /certs/server.crt /certs/server.key /var/lib/postgresql/tls/ &&
         chown -R postgres:postgres /var/lib/postgresql/tls &&
